@@ -1,0 +1,9 @@
+{
+  "name": "Local",
+  "values": [
+    {"key": "baseUrl", "value": "http://127.0.0.1:8765", "type": "default", "enabled": true},
+    {"key": "username", "value": "admin", "type": "default", "enabled": true},
+    {"key": "password", "value": "hunter2", "type": "secret", "enabled": true},
+    {"key": "unused", "value": "x", "type": "default", "enabled": false}
+  ]
+}

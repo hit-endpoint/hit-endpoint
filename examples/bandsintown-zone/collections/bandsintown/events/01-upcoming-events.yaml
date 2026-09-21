@@ -1,0 +1,17 @@
+name: Get upcoming artist events
+method: GET
+url: "{{base_url}}/artists/{{artist}}/events"
+query:
+  date: upcoming
+tests:
+  - status: 200
+  - json:
+      "[0].id": {exists: true}
+      "[0].artist_id": {exists: true}
+      "[0].url": {type: string}
+      "[0].venue.name": {type: string}
+      "[0].venue.city": {type: string}
+captures:
+  first_event_id: json[0].id
+  first_event_city: json[0].venue.city
+  first_event_url: json[0].url

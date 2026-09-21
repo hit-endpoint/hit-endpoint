@@ -1,0 +1,8 @@
+# Applies to every request in this folder and below.
+description: Petstore API collection
+headers:
+  Accept: application/json
+  User-Agent: hit/petstore
+tests:
+  - name: no server errors
+    status: ["2xx", "3xx", "4xx"]

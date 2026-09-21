@@ -1,0 +1,8 @@
+# Production environment configuration (committed).
+# Put sensitive values in production.secrets.yaml (gitignored).
+base_url: https://api.petstore.example.com
+vars:
+  admin_user: "{{$env:PETSTORE_PROD_USER:prod-admin}}"
+auth:
+  type: bearer
+  token: "{{token}}"

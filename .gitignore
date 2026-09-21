@@ -1,0 +1,25 @@
+# Binaries
+hit
+*.exe
+*.test
+
+# Local Hit runtime state & telemetry
+.hit/
+
+# Secrets & Credentials
+*.secrets.yaml
+*.secrets.yml
+.env
+.env.*
+!.env.example
+
+# Temporary / Scratch
+collections-to-import/
+tmp/
+
+# OS / Editor files
+.DS_Store
+**/.DS_Store
+.idea/
+.vscode/
+*.swp

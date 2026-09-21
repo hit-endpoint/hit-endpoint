@@ -1,0 +1,18 @@
+name: Login
+description: Exchanges credentials for a bearer token and captures it as {{token}} for every later request.
+method: POST
+url: "{{base_url}}/auth/login"
+auth: none
+body:
+  json:
+    username: "{{admin_user}}"
+    password: "{{admin_password}}"
+tests:
+  - status: 200
+  - json:
+      access_token: {exists: true, type: string}
+      token_type: bearer
+      expires_in: {gt: 0}
+captures:
+  token: json.access_token
+  token_expires_in: json.expires_in

@@ -1,0 +1,7 @@
+# Production environment configuration (committed)
+# Sensitive / custom application IDs can be stored in production.secrets.yaml (gitignored)
+# or passed via environment variable BANDSINTOWN_APP_ID.
+base_url: https://rest.bandsintown.com
+vars:
+  app_id: "{{$env:BANDSINTOWN_APP_ID:hit_example_app}}"
+  artist: "{{$env:BANDSINTOWN_ARTIST:Maroon 5}}"

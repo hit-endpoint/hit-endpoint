@@ -1,0 +1,10 @@
+# Applies to every request in this collection
+description: Bandsintown Public API collection
+headers:
+  Accept: application/json
+  User-Agent: hit/bandsintown
+query:
+  app_id: "{{app_id}}"
+tests:
+  - name: successful response
+    status: 200

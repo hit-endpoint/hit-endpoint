@@ -1,0 +1,13 @@
+name: Artist tour lookup flow
+description: Lookup artist details and query upcoming and date-ranged tour dates
+steps:
+  - request: bandsintown/artists/01-get-artist
+    vars:
+      artist: Maroon 5
+  - request: bandsintown/events/01-upcoming-events
+    vars:
+      artist: "{{artist_name}}"
+  - request: bandsintown/events/04-date-range
+    vars:
+      artist: "{{artist_name}}"
+      date_range: "2017-01-01,2017-12-31"

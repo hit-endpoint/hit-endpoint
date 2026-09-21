@@ -1,0 +1,9 @@
+name: Health check
+method: GET
+url: "{{base_url}}/health"
+auth: none
+tests:
+  - status: 200
+  - json:
+      status: ok
+  - max_ms: 1000

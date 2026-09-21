@@ -1,0 +1,15 @@
+# Policy Governance Configuration
+# Mandates corporate API testing standards across CI and pre-commit hooks.
+version: "1"
+
+# Required assertion categories across every request file
+require_assertions:
+  - status
+
+# Maximum acceptable latency threshold that can be asserted (SLA ceiling)
+max_latency: 2000ms
+
+# Security Hygiene
+disallow_insecure_tls: true      # Forbid verify: false or -k in test files
+disallow_hardcoded_secrets: true # Detect raw tokens/passwords; mandate {{...}} or $env:...
+require_description: false       # Mandate human documentation on each request

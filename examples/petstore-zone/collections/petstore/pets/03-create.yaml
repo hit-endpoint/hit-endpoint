@@ -1,0 +1,20 @@
+name: Create a pet
+method: POST
+url: "{{base_url}}/pets"
+body:
+  json:
+    name: "Pet {{$randomInt}}"
+    kind: hamster
+    age: 1
+tests:
+  - status: 201
+  - headers:
+      location: {starts_with: /pets/}
+  - json:
+      id: {type: integer}
+      kind: hamster
+captures:
+  new_pet_id: json.id
+  new_pet_location: headers.location
+hooks:
+  after: scripts/check_created.py

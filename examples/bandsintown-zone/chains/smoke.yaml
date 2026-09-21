@@ -1,0 +1,5 @@
+name: Bandsintown smoke test
+description: Quick sanity check for core artist and events endpoints
+steps:
+  - request: bandsintown/artists/01-get-artist
+  - request: bandsintown/events/01-upcoming-events

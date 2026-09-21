@@ -1,0 +1,7 @@
+base_url: https://petstore.staging.example.com
+vars:
+  admin_user: "{{$env:STAGING_USER}}"
+  admin_password: "{{$env:STAGING_PASSWORD}}"
+auth:
+  type: bearer
+  token: "{{token}}"

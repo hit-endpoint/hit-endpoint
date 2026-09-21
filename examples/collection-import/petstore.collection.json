@@ -1,0 +1,102 @@
+{
+  "info": {
+    "name": "Petstore",
+    "description": "Sample export used to demonstrate `hit import`.",
+    "schema": "https://schema.api.json/collection/v2.1.0/collection.json"
+  },
+  "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{token}}", "type": "string"}]},
+  "variable": [{"key": "baseUrl", "value": "http://127.0.0.1:8765", "type": "string"}],
+  "event": [
+    {"listen": "test", "script": {"type": "text/javascript", "exec": [
+      "pm.test(\"no server error\", function () { pm.expect(pm.response.code).to.be.below(500); });"
+    ]}}
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login",
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": [
+            "var jsonData = pm.response.json();",
+            "pm.test(\"Status code is 200\", function () {",
+            "    pm.response.to.have.status(200);",
+            "});",
+            "pm.test(\"Token present\", function () {",
+            "    pm.expect(jsonData.access_token).to.be.a('string');",
+            "    pm.expect(jsonData.token_type).to.eql(\"bearer\");",
+            "});",
+            "pm.environment.set(\"token\", jsonData.access_token);",
+            "// custom helper the importer cannot translate:",
+            "console.log(\"logged in\");",
+            "customHelper.setNextRequest(\"List pets\");"
+          ]}}],
+          "request": {
+            "auth": {"type": "noauth"},
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}", "options": {"raw": {"language": "json"}}},
+            "url": {"raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "Pets",
+      "item": [
+        {
+          "name": "List pets",
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": [
+            "pm.test(\"ok\", () => pm.response.to.have.status(200));",
+            "pm.test(\"has items\", function () {",
+            "    const body = pm.response.json();",
+            "    pm.expect(body.items).to.be.an('array');",
+            "    pm.expect(body.total).to.be.above(0);",
+            "    pm.collectionVariables.set(\"petId\", body.items[0].id);",
+            "});",
+            "pm.test(\"fast\", function () { pm.expect(pm.response.responseTime).to.be.below(500); });"
+          ]}}],
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Accept", "value": "application/json"}],
+            "url": {"raw": "{{baseUrl}}/pets?kind=dog", "host": ["{{baseUrl}}"], "path": ["pets"],
+                    "query": [{"key": "kind", "value": "dog"}, {"key": "debug", "value": "1", "disabled": true}]}
+          }
+        },
+        {
+          "name": "Get pet",
+          "event": [{"listen": "test", "script": {"type": "text/javascript", "exec": [
+            "pm.test(\"found\", function () {",
+            "    pm.response.to.have.status(200);",
+            "    pm.expect(pm.response.json()).to.have.property('name');",
+            "    pm.response.to.have.header(\"Content-Type\");",
+            "});"
+          ]}}],
+          "request": {
+            "method": "GET",
+            "url": {"raw": "{{baseUrl}}/pets/:petId", "host": ["{{baseUrl}}"], "path": ["pets", ":petId"],
+                    "variable": [{"key": "petId", "value": "1"}]}
+          }
+        },
+        {
+          "name": "Create pet",
+          "event": [
+            {"listen": "prerequest", "script": {"type": "text/javascript", "exec": [
+              "pm.environment.set(\"requestId\", Date.now());"
+            ]}},
+            {"listen": "test", "script": {"type": "text/javascript", "exec": [
+              "pm.response.to.have.status(201);",
+              "pm.environment.set(\"newPetId\", pm.response.json().id);"
+            ]}}
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{"key": "X-Request-Id", "value": "{{requestId}}"}],
+            "body": {"mode": "raw", "raw": "{\"name\": \"Imported {{$randomInt}}\", \"kind\": \"parrot\"}", "options": {"raw": {"language": "json"}}},
+            "url": "{{baseUrl}}/pets"
+          }
+        }
+      ]
+    }
+  ]
+}

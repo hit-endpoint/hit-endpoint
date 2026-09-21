@@ -1,0 +1,16 @@
+name: Get artist information
+method: GET
+url: "{{base_url}}/artists/{{artist}}"
+tests:
+  - status: 200
+  - json:
+      id: {gte: 1}
+      name: {exists: true}
+      "length(name)": {gte: 1}
+      url: {type: string}
+      image_url: {type: string}
+      tracker_count: {gte: 0}
+captures:
+  artist_name: json.name
+  artist_id: json.id
+  tracker_count: json.tracker_count

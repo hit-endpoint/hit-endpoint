@@ -1,0 +1,6 @@
+# Local offline mock server (committed)
+# Start the mock server with: hit mock 8765 --openapi openapi.yaml
+base_url: http://127.0.0.1:8765
+vars:
+  app_id: hit_example_app
+  artist: Maroon 5

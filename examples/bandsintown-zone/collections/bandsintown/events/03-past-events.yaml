@@ -1,0 +1,10 @@
+name: Get past artist events
+method: GET
+url: "{{base_url}}/artists/{{artist}}/events"
+query:
+  date: past
+tests:
+  - status: 200
+  - json:
+      "[0].id": {exists: true}
+      "[0].artist_id": {exists: true}

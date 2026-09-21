@@ -1,0 +1,7 @@
+name: Smoke test every environment
+steps:
+  - request: petstore/health
+    repeat: 3
+  - request: petstore/auth/login
+  - request: petstore/pets/list
+    vars: {kind: dog}

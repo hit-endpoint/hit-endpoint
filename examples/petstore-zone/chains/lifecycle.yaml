@@ -1,0 +1,22 @@
+# Flow demonstrating creating a resource, asserting response, and deleting it.
+name: Complete Pet Lifecycle
+steps:
+  - request: petstore/auth/login
+  - request: petstore/pets/create
+    vars:
+      name: "Shadow {{$randomInt}}"
+      kind: dog
+      age: 2
+  - set:
+      first_pet_id: "{{new_pet_id}}"
+  - request: petstore/pets/get
+    name: Verify newly created pet
+    tests:
+      - status: 200
+      - json: {kind: hamster}
+  - request: petstore/pets/delete
+    name: Delete newly created pet
+  - request: petstore/pets/get
+    name: Confirm deletion
+    replace_tests:
+      - status: 404

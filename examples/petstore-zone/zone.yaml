@@ -1,0 +1,6 @@
+# A hit zone: the git repo IS the zone. Commit everything except .hit/ and *.secrets.yaml.
+name: petstore
+default_server: local
+default_environment: local
+vars:
+  page_size: 25

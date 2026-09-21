@@ -1,0 +1,21 @@
+name: Petstore Health Synthetic Probe
+ref: collections/petstore/00-health.yaml
+interval: 30s
+regions:
+  - us-east
+  - eu-central
+  - ap-southeast
+consensus_threshold: 2
+sla:
+  max_latency: 500ms
+  allowed_status:
+    - 200
+alerts:
+  pagerduty:
+    routing_key: "$env:PAGERDUTY_ROUTING_KEY"
+    severity: critical
+  slack:
+    webhook_url: "$env:SLACK_WEBHOOK_URL"
+  opsgenie:
+    api_key: "$env:OPSGENIE_API_KEY"
+    priority: P1

@@ -1,0 +1,4 @@
+# Named endpoint presets for Bandsintown
+artist: bandsintown/artists/01-get-artist
+events: bandsintown/events/01-upcoming-events
+tour: bandsintown/events/04-date-range

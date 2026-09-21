@@ -1,0 +1,12 @@
+name: Get events in date range
+method: GET
+url: "{{base_url}}/artists/{{artist}}/events"
+query:
+  date: "{{date_range}}"
+vars:
+  date_range: "2017-01-01,2017-12-31"
+tests:
+  - status: 200
+  - json:
+      "[0].id": {exists: true}
+      "[0].datetime": {exists: true}

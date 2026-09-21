@@ -1,0 +1,8 @@
+name: Get one pet
+method: GET
+url: "{{base_url}}/pets/{{first_pet_id}}"
+tests:
+  - status: 200
+  - json:
+      id: "{{first_pet_id}}"
+      name: {type: string}

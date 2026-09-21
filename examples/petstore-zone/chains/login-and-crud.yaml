@@ -1,0 +1,20 @@
+# A flow chains requests with one shared variable state. Run with: hit run login-and-crud
+name: Login, list, create, fetch, delete
+vars:
+  kind: cat
+steps:
+  - request: petstore/auth/login
+  - request: petstore/pets/list           # picks up {{token}} and the flow's kind=cat
+    tests:
+      - json: {"items[0].name": Tom}
+  - request: petstore/pets/create
+  - set:
+      first_pet_id: "{{new_pet_id}}"      # point the 'get' request at what we just created
+  - request: petstore/pets/get
+    name: Fetch the created pet
+    tests:
+      - json: {kind: hamster}
+  - request: petstore/pets/delete
+  - request: petstore/pets/get
+    name: Confirm it is gone
+    replace_tests: [{status: 404}]        # 'tests:' adds to the file's tests; replace_tests swaps them out

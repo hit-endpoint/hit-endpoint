@@ -1,0 +1,5 @@
+name: Delete the created pet
+method: DELETE
+url: "{{base_url}}{{new_pet_location}}"
+tests:
+  - status: 204

@@ -1,0 +1,12 @@
+# Bandsintown Example Zone
+# A hit zone: the git repo IS the zone. Commit everything except .hit/ and *.secrets.yaml.
+name: bandsintown
+default_server: local
+default_environment: local
+vars:
+  app_id: hit_example_app
+  artist: Maroon 5
+shorthands:
+  artist: bandsintown/artists/01-get-artist
+  events: bandsintown/events/01-upcoming-events
+  tour: bandsintown/events/04-date-range

@@ -1,0 +1,11 @@
+# One file per server. Values here are committed; put real secrets in local.secrets.yaml (gitignored)
+# or reference OS environment variables with {{$env:NAME}} / {{$env:NAME:default}}.
+base_url: http://127.0.0.1:8765
+vars:
+  admin_user: admin
+  admin_password: "{{$env:PETSTORE_PASSWORD:hunter2}}"
+# Default auth for every request in this environment. Requests can override with auth: none or their own block.
+# {{token}} is empty until the login request captures it.
+auth:
+  type: bearer
+  token: "{{token}}"
