@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"hit/internal/history"
-	"hit/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/history"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
 )
 
 func TestBuildHARFromResults(t *testing.T) {

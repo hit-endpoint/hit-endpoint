@@ -1,4 +1,4 @@
-module hit
+module github.com/hit-endpoint/hit-endpoint
 
 go 1.22.5
 

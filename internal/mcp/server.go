@@ -9,13 +9,13 @@ import (
 	"strconv"
 	"strings"
 
-	"hit/internal/flows"
-	"hit/internal/perf"
-	"hit/internal/runner"
-	"hit/internal/sanity"
-	"hit/internal/spec"
-	"hit/internal/types"
-	"hit/internal/zone"
+	"github.com/hit-endpoint/hit-endpoint/internal/flows"
+	"github.com/hit-endpoint/hit-endpoint/internal/perf"
+	"github.com/hit-endpoint/hit-endpoint/internal/runner"
+	"github.com/hit-endpoint/hit-endpoint/internal/sanity"
+	"github.com/hit-endpoint/hit-endpoint/internal/spec"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/zone"
 )
 
 type JSONRPCRequest struct {

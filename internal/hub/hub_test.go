@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"hit/internal/telemetry"
+	"github.com/hit-endpoint/hit-endpoint/internal/telemetry"
 )
 
 func TestHubStore_SaveAndQuery(t *testing.T) {

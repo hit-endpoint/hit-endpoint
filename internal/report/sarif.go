@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"hit/internal/fuzz"
+	"github.com/hit-endpoint/hit-endpoint/internal/fuzz"
 )
 
 const (

@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"hit/internal/spec"
-	"hit/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/spec"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
 )
 
 // Row represents one data record in a parameterized matrix.

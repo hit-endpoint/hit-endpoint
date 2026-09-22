@@ -17,8 +17,8 @@ import (
 	"strings"
 	"time"
 
-	"hit/internal/types"
-	"hit/internal/zone"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/zone"
 )
 
 const (

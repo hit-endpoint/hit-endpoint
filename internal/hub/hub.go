@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"hit/internal/telemetry"
+	"github.com/hit-endpoint/hit-endpoint/internal/telemetry"
 )
 
 // Config configures the Hit Fleet Hub HTTP server.

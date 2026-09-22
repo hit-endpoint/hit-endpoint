@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"hit/internal/history"
-	"hit/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/history"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
 )
 
 // HAR represents the root container of an HTTP Archive format (1.2).

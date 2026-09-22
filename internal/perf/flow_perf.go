@@ -9,9 +9,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"hit/internal/flows"
-	"hit/internal/runner"
-	"hit/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/flows"
+	"github.com/hit-endpoint/hit-endpoint/internal/runner"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
 )
 
 func RunFlowPerf(session *runner.Session, flowRef string, flowData map[string]any, opts PerfOptions) (*types.PerfReport, error) {

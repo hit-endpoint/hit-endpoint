@@ -1,8 +1,13 @@
 # Hit Endpoint (`hit`)
 
-> Declarative, Git-native API testing and load engine from the command line.
+> **23 Integrated Features** — Declarative, Git-native API testing, simulation, fuzzing, load testing, and fleet operations from the command line.
 
-Requests are small, version-controlled YAML files stored directly in your repository. Fast, compiled Go CLI with zero runtime dependencies, no UI overhead, no cloud account, and no licensing hurdles.
+[![Features](https://img.shields.io/badge/features-23%20integrated-blue.svg)](#-feature-matrix)
+[![Go Version](https://img.shields.io/badge/go-1.22%2B-00ADD8.svg)](https://go.dev)
+[![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
+[![Zero Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen.svg)](#)
+
+A fast, compiled Go CLI delivering **23 production-ready testing features** in a single standalone binary. Requests are small, version-controlled YAML files stored directly in your repository—zero runtime dependencies, no UI overhead, no cloud account required, and no licensing hurdles.
 
 ---
 
@@ -12,10 +17,10 @@ Requests are small, version-controlled YAML files stored directly in your reposi
 
 ```bash
 # Requires Go 1.22+
-go install <repo-url>/cmd/hit@latest
+go install github.com/hit-endpoint/hit-endpoint/cmd/hit@latest
 
 # Or build from source:
-git clone <repo-url> hit-endpoint
+git clone https://github.com/hit-endpoint/hit-endpoint.git
 cd hit-endpoint
 go build -o hit ./cmd/hit
 ```
@@ -78,15 +83,20 @@ hit run collections/users/get-user.yaml -s staging
 
 | Feature | Command / Flag | Highlights |
 |---|---|---|
-| [**Ergonomic CLI**](docs/adhoc-requests.md) | `hit body`, `hit code`, `hit time` | Ad-hoc request execution designed for UNIX piping, scripts, and terminal debugging. |
-| [**OpenAPI & Postman**](docs/importers.md) | `hit import <file>` | One-click migration from OpenAPI 3.x, Swagger, Postman, or cURL. |
+| [**Ergonomic CLI**](docs/adhoc-requests.md) | `hit body`, `hit code`, `hit time`, `hit headers` | Ad-hoc request execution designed for UNIX piping, scripts, and terminal debugging. |
+| [**Universal Importers**](docs/importers.md) | `hit import <file>` | One-click migration from OpenAPI 3.x, Swagger 2.0, Postman Collections, or cURL. |
 | [**Zone Scaffolding**](docs/zones-and-servers.md) | `hit wizard`, `hit sanity` | Zero-friction workspace scaffolding + 8-point environment readiness check. |
-| [**Scenario Chains**](docs/requests-and-flows.md) | `chains/*.yaml`, `hit run` | Multi-step user journeys (login $\to$ create $\to$ delete) with state passing. |
-| [**Auto Assertions**](docs/assertions-and-validation.md) | `hit assert`, `hit new --infer` | Automatically infers 100%-passing assertions from live responses. |
-| [**Semantic Diffing**](docs/history-diff-reports.md) | `hit diff <ID1> <ID2>` | Unified Git-style hunks across status, payloads, and latency shifts. |
-| [**CI/CD Reporting**](docs/history-diff-reports.md) | `--junit`, `--sarif`, `--webhook-on-failure` | Native JUnit XML test tabs, GitHub Code Scanning SARIF, and incident webhooks. |
-| [**Offline Mocking**](docs/mock-server.md) | `hit mock --chaos` | Zero-dependency mock server with latency jitter, token expiry, and chaos modes. |
-| [**Streaming (SSE/WS)**](docs/streaming-sse-ws.md) | `hit sse`, `hit ws` | Real-time TTFT benchmarking for LLMs and full-duplex RFC 6455 WebSockets. |
+| [**Endpoint Shorthands**](docs/shorthands.md) | `hit shorthand`, `hit <alias>` | Fast aliases for frequently called endpoints with pre-baked servers and headers. |
+| [**Scenario Chains**](docs/requests-and-flows.md) | `chains/*.yaml`, `hit run` | Multi-step user journeys (login $\to$ create $\to$ delete) with state passing and script hooks. |
+| [**Data-Driven Matrix Testing**](docs/matrix-testing.md) | `matrix:`, `hit run` | Parameterized row variations from inline data or external CSV/JSON files. |
+| [**Auto Assertions**](docs/assertions-and-validation.md) | `hit assert`, `hit new --infer` | Automatically infers 100%-passing assertions and JSON contracts from live responses. |
+| [**Semantic Diffing & Replay**](docs/history-diff-reports.md) | `hit diff <ID1> <ID2>`, `hit replay` | Unified Git-style hunks across status, payloads, and latency shifts, plus instant replay. |
+| [**CI/CD & Security Reporting**](docs/history-diff-reports.md) | `--junit`, `--sarif`, `--webhook-on-failure` | Native JUnit XML test tabs, GitHub Code Scanning SARIF, incident webhooks, and HAR 1.2 / HTML reports. |
+| [**Multi-Language Snippets**](docs/code-blocks.md) | `hit snippet <REF\|URL> -l L` | Exports runnable code blocks in Python (`requests`), JavaScript (`fetch`), PHP (`curl`), and Go (`net/http`). |
+| [**Offline Mocking & Chaos**](docs/mock-server.md) | `hit mock --chaos`, `--openapi` | Zero-dependency mock server with latency jitter, token expiry, payload corruption, and chaos modes. |
+| [**First-Class GraphQL**](docs/graphql.md) | `hit graphql`, `hit schema graphql` | Query execution with `--fail-on-errors`, full schema introspection, and SDL export. |
+| [**Streaming (SSE/WS)**](docs/streaming-sse-ws.md) | `hit sse`, `hit ws` | Real-time TTFT benchmarking for LLMs and full-duplex RFC 6455 WebSockets with pattern matching. |
+| [**Endpoint Scheduler**](docs/scheduler.md) | `hit schedule [--every D] [--at T]` | Automated periodic probes with response expectation validation (`--status`, `--expect`). |
 | [**Mutation Fuzzing**](docs/fuzz-and-mutation.md) | `hit fuzz <URL> [--sarif]` | 6 mutation strategies detecting 5xx crashes, boundary leaks, and hangs. |
 | [**Distributed Load Benchmarks**](docs/performance-testing.md) | `hit perf [--hub U] [--workers L]` | Coordinator with dynamic Hub auto-discovery, global percentiles (p50/p95/p99), and SLA gates. |
 | [**API Cost Estimator**](docs/cost-estimator.md) | `hit cost` | Multi-scenario cost range modeling (Min, Expected, Worst), tiered volume curves, retries, and FinOps budget gates. |
@@ -95,6 +105,7 @@ hit run collections/users/get-user.yaml -s staging
 | [**Telemetry & Fleet Hub**](docs/telemetry-and-cloud.md) | `hit run --publish`, `hit hub` | Centralized dashboard, developer vs. CI node attribution, and regional fleet topology. |
 | [**Synthetic Monitoring**](docs/synthetic-monitoring.md) | `hit probe run`, `hit probe daemon` | Multi-region consensus monitoring with Hub enrollment, PagerDuty, and Slack alerts. |
 | [**AI / MCP Server**](docs/ai-agent-and-mcp.md) | `hit mcp` | Native Model Context Protocol support for Cursor, Claude, and Windsurf. |
+| [**Interactive Learning Sandbox**](learn/README.md) | `hit learn`, `hit learn verify` | Hands-on offline interactive training curriculum and automated grading engine. |
 
 For in-depth guides on every feature, explore the [**Documentation Library**](docs/README.md).
 
@@ -112,12 +123,19 @@ For in-depth guides on every feature, explore the [**Documentation Library**](do
 | `hit import [collection\|openapi\|curl] FILE...` | One-click migration from OpenAPI 3.x, Swagger, Postman, or cURL |
 | `hit wizard [DIR] [-y]` | Scaffolds a new API zone (configs, secrets, dirs) |
 | `hit sanity [COLLECTION]` | Pre-flight check for endpoints, secrets, and credentials |
+| `hit shorthand [NAME] [--url U] [--server S]` | Inspects or creates friendly aliases and server presets (`hit <alias>`) |
 | `hit run REF... [-s SERVER]` | Executes saved requests or scenario chains (`--publish`, `--junit`, `--webhook-on-failure`, `--enforce-policy`) |
+| `matrix:` in request specs | Parameterized data-driven test variants executed across inline or CSV/JSON rows |
 | `hit assert <URL\|REF> [--save]` | Infers assertions automatically from live response |
 | `hit diff <ID1> [<ID2>]` | Diffs two requests semantically with normalized JSON |
-| `hit mock [PORT] [--openapi S]` | Starts offline mock server with optional chaos controls |
-| `hit sse <URL>` | Connects to SSE streams and benchmarks TTFT |
-| `hit ws <URL> [--expect P]` | Pure Go WebSocket client with pattern matching |
+| `hit replay <ID>` | Replays a request from append-only local history log |
+| `hit report coverage [--html] [--har]` | Generates OpenAPI coverage audit, interactive HTML, or HAR 1.2 exports |
+| `hit snippet <REF\|URL> -l L` | Exports runnable code (Python, JS, Go, PHP) |
+| `hit mock [PORT] [--chaos] [--openapi S]` | Starts offline mock server with optional chaos controls & OpenAPI generation |
+| `hit graphql <URL> -q "..."` | Executes GraphQL query with error checks, or `--introspect` for SDL schema |
+| `hit sse <URL>` | Connects to SSE streams and benchmarks TTFT (Time To First Token) |
+| `hit ws <URL> [--expect P]` | Pure Go WebSocket client with pattern matching assertions |
+| `hit schedule <REF> [--every D] [--at T]` | Automated recurring endpoint probes with expectation validations |
 | `hit fuzz <REF\|URL> [-n N] [--sarif F]` | Boundary & mutation fuzzing against 5xx crashes with SARIF export |
 | `hit perf REF [-c N] [--hub U]` | Distributed load test with worker clusters & dynamic Hub auto-discovery |
 | `hit perf worker [--port P] [--hub U]` | Starts load worker daemon with automated Hub registration & 15s heartbeats |
@@ -129,8 +147,7 @@ For in-depth guides on every feature, explore the [**Documentation Library**](do
 | `hit probe daemon <FILE> [--hub U]` | Continuous synthetic API monitoring daemon with Hub enrollment & incident alerting |
 | `hit probe test-alert <FILE>` | Validates PagerDuty, Slack Block Kit, and Opsgenie notifications |
 | `hit mcp` | Starts stdio Model Context Protocol server for AI tools |
-| `hit snippet <REF\|URL> -l L` | Exports runnable code (Python, JS, Go, PHP) |
-| `hit learn [verify]` | Hands-on offline interactive training curriculum |
+| `hit learn [verify]` | Hands-on offline interactive training curriculum & automated verification grader |
 
 For full syntax specifications, see the [**Single Source of Truth Reference**](reference.md) or run `hit reference`.
 

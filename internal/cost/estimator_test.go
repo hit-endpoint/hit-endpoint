@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"hit/internal/output"
+	"github.com/hit-endpoint/hit-endpoint/internal/output"
 )
 
 func TestCalculateAmplification(t *testing.T) {

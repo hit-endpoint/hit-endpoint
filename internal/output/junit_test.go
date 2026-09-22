@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"hit/internal/assertions"
-	"hit/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/assertions"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
 )
 
 func TestBuildJUnitSuites(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"hit/internal/zone"
+	"github.com/hit-endpoint/hit-endpoint/internal/zone"
 )
 
 func ImportCurl(curlInput string, targetDir string, nameOverride string) (*ImportReport, error) {

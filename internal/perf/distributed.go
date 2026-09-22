@@ -17,10 +17,10 @@ import (
 	"sync"
 	"time"
 
-	"hit/internal/runner"
-	"hit/internal/spec"
-	"hit/internal/telemetry"
-	"hit/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/runner"
+	"github.com/hit-endpoint/hit-endpoint/internal/spec"
+	"github.com/hit-endpoint/hit-endpoint/internal/telemetry"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
 
 	"gopkg.in/yaml.v3"
 )

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"hit/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
 )
 
 func TestStoreAppendAndList(t *testing.T) {

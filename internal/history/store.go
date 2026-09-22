@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"hit/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
 )
 
 const (

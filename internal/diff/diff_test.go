@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"hit/internal/output"
+	"github.com/hit-endpoint/hit-endpoint/internal/output"
 )
 
 func TestCanonicalizeBody(t *testing.T) {

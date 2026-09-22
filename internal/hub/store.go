@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"hit/internal/telemetry"
+	"github.com/hit-endpoint/hit-endpoint/internal/telemetry"
 )
 
 // NodeRecord tracks an individual machine, worker, or runner in the fleet.

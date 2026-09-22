@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"hit/internal/history"
+	"github.com/hit-endpoint/hit-endpoint/internal/history"
 )
 
 func TestAnalyzeLatency(t *testing.T) {

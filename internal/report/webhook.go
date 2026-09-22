@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"hit/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
 )
 
 // FailureItem details an individual request or assertion failure.

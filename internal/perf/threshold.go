@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"hit/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
 )
 
 var thresholdRegex = regexp.MustCompile(`^\s*([a-zA-Z0-9_]+)\s*(<=|>=|<|>|==|=)\s*([0-9.]+)\s*(ms|s|%)?\s*$`)

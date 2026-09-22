@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
-	"hit/internal/assertions"
+	"github.com/hit-endpoint/hit-endpoint/internal/assertions"
 )
 
 // PromoteToYAML converts an Entry to a structured hit request YAML string

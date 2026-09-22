@@ -1,8 +1,8 @@
 package report
 
 import (
-	"hit/internal/output"
-	"hit/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/output"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
 )
 
 // WriteJUnitXML generates standard JUnit XML from request execution results and writes it to destPath.

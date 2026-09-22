@@ -13,8 +13,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"hit/internal/spec"
-	"hit/internal/zone"
+	"github.com/hit-endpoint/hit-endpoint/internal/spec"
+	"github.com/hit-endpoint/hit-endpoint/internal/zone"
 )
 
 type OperationCoverage struct {

@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"hit/internal/flows"
-	"hit/internal/perf"
-	"hit/internal/runner"
-	"hit/internal/zone"
+	"github.com/hit-endpoint/hit-endpoint/internal/flows"
+	"github.com/hit-endpoint/hit-endpoint/internal/perf"
+	"github.com/hit-endpoint/hit-endpoint/internal/runner"
+	"github.com/hit-endpoint/hit-endpoint/internal/zone"
 )
 
 type mockPetstore struct {

@@ -5,7 +5,7 @@ import (
 	"io"
 	"strings"
 
-	"hit/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
 )
 
 func PrintAgentResult(r *types.Result, w io.Writer) {

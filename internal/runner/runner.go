@@ -15,13 +15,13 @@ import (
 	"strings"
 	"time"
 
-	"hit/internal/assertions"
-	"hit/internal/history"
-	"hit/internal/matrix"
-	"hit/internal/spec"
-	"hit/internal/templating"
-	"hit/internal/types"
-	"hit/internal/zone"
+	"github.com/hit-endpoint/hit-endpoint/internal/assertions"
+	"github.com/hit-endpoint/hit-endpoint/internal/history"
+	"github.com/hit-endpoint/hit-endpoint/internal/matrix"
+	"github.com/hit-endpoint/hit-endpoint/internal/spec"
+	"github.com/hit-endpoint/hit-endpoint/internal/templating"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/zone"
 )
 
 var stepKeys = map[string]bool{

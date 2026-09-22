@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"hit/internal/output"
+	"github.com/hit-endpoint/hit-endpoint/internal/output"
 )
 
 type DiffType int

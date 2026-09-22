@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
-	"hit/internal/flows"
-	"hit/internal/runner"
-	"hit/internal/spec"
-	"hit/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/flows"
+	"github.com/hit-endpoint/hit-endpoint/internal/runner"
+	"github.com/hit-endpoint/hit-endpoint/internal/spec"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
 )
 
 type ProbeStatus string

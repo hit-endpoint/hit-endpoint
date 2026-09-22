@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"hit/internal/spec"
-	"hit/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/spec"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
 )
 
 func TestMergePerfReports(t *testing.T) {

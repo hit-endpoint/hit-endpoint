@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strconv"
 
-	"hit/internal/assertions"
+	"github.com/hit-endpoint/hit-endpoint/internal/assertions"
 )
 
 type Result struct {

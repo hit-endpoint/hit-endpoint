@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"hit/internal/history"
+	"github.com/hit-endpoint/hit-endpoint/internal/history"
 )
 
 type EndpointLatency struct {

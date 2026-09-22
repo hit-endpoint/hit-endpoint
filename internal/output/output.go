@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"hit/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
 )
 
 type Printer struct {

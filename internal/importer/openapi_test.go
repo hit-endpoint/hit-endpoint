@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"hit/internal/zone"
+	"github.com/hit-endpoint/hit-endpoint/internal/zone"
 )
 
 var sampleOpenAPI3 = `

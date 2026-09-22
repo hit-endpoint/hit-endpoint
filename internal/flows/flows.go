@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"hit/internal/runner"
-	"hit/internal/templating"
-	"hit/internal/types"
-	"hit/internal/zone"
+	"github.com/hit-endpoint/hit-endpoint/internal/runner"
+	"github.com/hit-endpoint/hit-endpoint/internal/templating"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/zone"
 )
 
 type FlowResult struct {

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"hit/internal/spec"
+	"github.com/hit-endpoint/hit-endpoint/internal/spec"
 )
 
 func TestCheckRequestSpec_MissingStatus(t *testing.T) {

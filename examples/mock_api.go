@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"hit/internal/mock"
+	"github.com/hit-endpoint/hit-endpoint/internal/mock"
 )
 
 func main() {

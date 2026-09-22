@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"hit/internal/assertions"
-	"hit/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/assertions"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
 )
 
 func TestPrintAgentResult(t *testing.T) {

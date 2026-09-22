@@ -3,7 +3,7 @@ package perf
 import (
 	"testing"
 
-	"hit/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
 )
 
 func TestParseThresholds(t *testing.T) {

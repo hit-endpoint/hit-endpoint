@@ -9,9 +9,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"hit/internal/runner"
-	"hit/internal/spec"
-	"hit/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/runner"
+	"github.com/hit-endpoint/hit-endpoint/internal/spec"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
 )
 
 type PerfOptions struct {

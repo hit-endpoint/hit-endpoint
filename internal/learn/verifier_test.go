@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"hit/internal/history"
+	"github.com/hit-endpoint/hit-endpoint/internal/history"
 )
 
 func TestLessonVerifier(t *testing.T) {

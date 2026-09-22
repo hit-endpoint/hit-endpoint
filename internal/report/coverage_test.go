@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"hit/internal/zone"
+	"github.com/hit-endpoint/hit-endpoint/internal/zone"
 )
 
 func TestAuditCoverage(t *testing.T) {

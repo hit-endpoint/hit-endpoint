@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"hit/internal/history"
-	"hit/internal/runner"
-	"hit/internal/spec"
-	"hit/internal/types"
-	"hit/internal/zone"
+	"github.com/hit-endpoint/hit-endpoint/internal/history"
+	"github.com/hit-endpoint/hit-endpoint/internal/runner"
+	"github.com/hit-endpoint/hit-endpoint/internal/spec"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/zone"
 )
 
 // ScheduleOptions configures a scheduled request execution session.

@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"hit/internal/flows"
-	"hit/internal/runner"
-	"hit/internal/spec"
-	"hit/internal/templating"
-	"hit/internal/zone"
+	"github.com/hit-endpoint/hit-endpoint/internal/flows"
+	"github.com/hit-endpoint/hit-endpoint/internal/runner"
+	"github.com/hit-endpoint/hit-endpoint/internal/spec"
+	"github.com/hit-endpoint/hit-endpoint/internal/templating"
+	"github.com/hit-endpoint/hit-endpoint/internal/zone"
 )
 
 const Version = "0.1.0"

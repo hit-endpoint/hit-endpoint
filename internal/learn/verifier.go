@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"hit/internal/history"
-	"hit/internal/zone"
+	"github.com/hit-endpoint/hit-endpoint/internal/history"
+	"github.com/hit-endpoint/hit-endpoint/internal/zone"
 )
 
 // CheckItem represents an individual validation check within a lesson.

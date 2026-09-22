@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"hit/internal/spec"
+	"github.com/hit-endpoint/hit-endpoint/internal/spec"
 )
 
 func TestLoadMatrixInline(t *testing.T) {

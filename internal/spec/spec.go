@@ -14,8 +14,8 @@ import (
 	"strconv"
 	"strings"
 
-	"hit/internal/templating"
-	"hit/internal/zone"
+	"github.com/hit-endpoint/hit-endpoint/internal/templating"
+	"github.com/hit-endpoint/hit-endpoint/internal/zone"
 )
 
 var (

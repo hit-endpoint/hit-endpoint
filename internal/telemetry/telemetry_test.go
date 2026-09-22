@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"hit/internal/assertions"
-	"hit/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/assertions"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
 )
 
 type roundTripFunc func(req *http.Request) *http.Response

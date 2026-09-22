@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"hit/internal/zone"
+	"github.com/hit-endpoint/hit-endpoint/internal/zone"
 )
 
 var sampleCollection = map[string]any{

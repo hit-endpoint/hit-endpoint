@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"hit/internal/fuzz"
+	"github.com/hit-endpoint/hit-endpoint/internal/fuzz"
 )
 
 func TestBuildFuzzSARIF(t *testing.T) {

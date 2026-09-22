@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"hit/internal/output"
+	"github.com/hit-endpoint/hit-endpoint/internal/output"
 )
 
 // FormatTerminal generates human-readable colored terminal output.

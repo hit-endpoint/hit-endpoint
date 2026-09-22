@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"hit/internal/types"
+	"github.com/hit-endpoint/hit-endpoint/internal/types"
 )
 
 type HTMLReportStats struct {
