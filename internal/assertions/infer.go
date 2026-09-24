@@ -49,7 +49,7 @@ func InferFromResponse(status int, elapsedMs float64, headers map[string]string,
 	}
 
 	// 2. Latency SLA Assertion (max_ms)
-	if opts.IncludeLatency && elapsedMs > 0 {
+	if opts.IncludeLatency {
 		// Generous upper bound: max(500, ceil(elapsedMs * 2.5 rounded up to next 100))
 		bound := math.Ceil(elapsedMs * 2.5 / 100.0) * 100.0
 		if bound < 500 {

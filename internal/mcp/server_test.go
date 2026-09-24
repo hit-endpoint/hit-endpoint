@@ -3,7 +3,6 @@ package mcp
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -20,7 +19,21 @@ func TestMCPServerHandshakeAndTools(t *testing.T) {
 	// 2. Test tools/list
 	toolsReq := `{"jsonrpc": "2.0", "id": 2, "method": "tools/list"}` + "\n"
 	// 3. Test tools/call hit_list
-	callReq := fmt.Sprintf(`{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "hit_list", "arguments": {"zone": "%s"}}}`, wsDir) + "\n"
+	callPayload, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      3,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "hit_list",
+			"arguments": map[string]any{
+				"zone": wsDir,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal callReq: %v", err)
+	}
+	callReq := string(callPayload) + "\n"
 
 	in := bytes.NewBufferString(initReq + toolsReq + callReq)
 	var out bytes.Buffer
