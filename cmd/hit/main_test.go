@@ -1140,6 +1140,17 @@ func TestCLIShorthandFlow(t *testing.T) {
 		t.Errorf("expected success message, got: %s", stdout)
 	}
 
+	// 1b. hit shorthand [NAME] --url URL (direct shorthand syntax from README)
+	code, stdout, stderr = captureOutput(func() int {
+		return run([]string{"-z", tempDir, "shorthand", "direct-api", "--url", srv.URL, "-m", "GET", "-H", "X-Custom: hit-val"})
+	})
+	if code != 0 {
+		t.Fatalf("shorthand direct --url failed: %d, stderr: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "saved successfully") {
+		t.Errorf("expected success message, got: %s", stdout)
+	}
+
 	// 2. hit shorthand ls
 	code, stdout, stderr = captureOutput(func() int {
 		return run([]string{"-z", tempDir, "shorthand", "ls"})

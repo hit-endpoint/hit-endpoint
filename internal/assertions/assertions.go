@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jmespath/go-jmespath"
 )
@@ -447,6 +448,38 @@ func describe(matcher any) string {
 	return fmt.Sprintf("== %s", Short(matcher, 40))
 }
 
+func parseLatencyLimit(v any) (float64, error) {
+	if v == nil {
+		return 0, fmt.Errorf("latency limit is nil")
+	}
+	switch n := v.(type) {
+	case int:
+		return float64(n), nil
+	case int64:
+		return float64(n), nil
+	case float64:
+		return n, nil
+	case string:
+		s := strings.TrimSpace(n)
+		s = strings.TrimPrefix(s, "<=")
+		s = strings.TrimPrefix(s, "<")
+		s = strings.TrimSpace(s)
+		if d, err := time.ParseDuration(s); err == nil {
+			return float64(d.Microseconds()) / 1000.0, nil
+		}
+		if f, err := strconv.ParseFloat(s, 64); err == nil {
+			return f, nil
+		}
+		return 0, fmt.Errorf("invalid latency threshold: %s", n)
+	default:
+		f, ok := toFloat(v)
+		if ok {
+			return f, nil
+		}
+		return 0, fmt.Errorf("invalid latency threshold: %v", v)
+	}
+}
+
 func Evaluate(tests []map[string]any, response map[string]any) []TestResult {
 	var results []TestResult
 	for _, test := range tests {
@@ -499,13 +532,25 @@ func evaluateOne(test map[string]any, response map[string]any, results *[]TestRe
 			}
 			*results = append(*results, TestResult{Name: name, Passed: ok, Detail: detail})
 
-		case "max_ms":
+		case "max_ms", "latency":
 			ms, _ := toFloat(response["ms"])
-			maxMs, _ := toFloat(expected)
+			maxMs, err := parseLatencyLimit(expected)
+			if err != nil {
+				name := label
+				if name == "" {
+					name = fmt.Sprintf("latency %v", expected)
+				}
+				*results = append(*results, TestResult{Name: name, Passed: false, Detail: err.Error()})
+				continue
+			}
 			ok := ms <= maxMs
 			name := label
 			if name == "" {
-				name = fmt.Sprintf("responds within %v ms", expected)
+				if key == "latency" {
+					name = fmt.Sprintf("latency %v", expected)
+				} else {
+					name = fmt.Sprintf("responds within %v ms", expected)
+				}
 			}
 			detail := ""
 			if !ok {
@@ -601,6 +646,72 @@ func evaluateOne(test map[string]any, response map[string]any, results *[]TestRe
 			*results = append(*results, TestResult{Name: name, Passed: ok, Detail: detail})
 
 		default:
+			if strings.HasPrefix(key, "body.") || strings.HasPrefix(key, "json.") {
+				path := strings.TrimPrefix(key, "body.")
+				path = strings.TrimPrefix(path, "json.")
+				if response["json"] == nil {
+					name := label
+					if name == "" {
+						name = key
+					}
+					*results = append(*results, TestResult{Name: name, Passed: false, Detail: "response body is not JSON"})
+					continue
+				}
+				actual, err := Search(path, response["json"])
+				if err != nil {
+					name := label
+					if name == "" {
+						name = key
+					}
+					*results = append(*results, TestResult{Name: name, Passed: false, Detail: err.Error()})
+					continue
+				}
+				matched, detail := Match(actual, expected)
+				name := label
+				if name == "" {
+					name = fmt.Sprintf("%s %s", key, describe(expected))
+				}
+				*results = append(*results, TestResult{Name: name, Passed: matched, Detail: detail})
+				continue
+			}
+			if key == "body" {
+				if expMap, ok := expected.(map[string]any); ok && !isMatcherMap(expMap) {
+					for path, matcher := range expMap {
+						if response["json"] == nil {
+							name := label
+							if name == "" {
+								name = fmt.Sprintf("body.%s", path)
+							}
+							*results = append(*results, TestResult{Name: name, Passed: false, Detail: "response body is not JSON"})
+							continue
+						}
+						actual, err := Search(path, response["json"])
+						if err != nil {
+							name := label
+							if name == "" {
+								name = fmt.Sprintf("body.%s", path)
+							}
+							*results = append(*results, TestResult{Name: name, Passed: false, Detail: err.Error()})
+							continue
+						}
+						matched, detail := Match(actual, matcher)
+						name := label
+						if name == "" {
+							name = fmt.Sprintf("body.%s %s", path, describe(matcher))
+						}
+						*results = append(*results, TestResult{Name: name, Passed: matched, Detail: detail})
+					}
+					continue
+				}
+				matched, detail := Match(response["text"], expected)
+				name := label
+				if name == "" {
+					name = fmt.Sprintf("body %s", describe(expected))
+				}
+				*results = append(*results, TestResult{Name: name, Passed: matched, Detail: detail})
+				continue
+			}
+
 			name := label
 			if name == "" {
 				name = key

@@ -22,9 +22,9 @@ var (
 	schemeRegex = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*://`)
 	bodyKinds   = []string{"json", "raw", "form", "multipart", "graphql", "file"}
 	knownKeys   = map[string]bool{
-		"name": true, "method": true, "url": true, "headers": true, "query": true, "params": true,
+		"name": true, "method": true, "url": true, "path": true, "headers": true, "query": true, "params": true,
 		"body": true, "auth": true, "timeout": true, "follow_redirects": true, "verify": true,
-		"tests": true, "captures": true, "vars": true, "hooks": true, "description": true,
+		"tests": true, "assert": true, "assertions": true, "captures": true, "vars": true, "hooks": true, "description": true,
 	}
 )
 
@@ -206,6 +206,8 @@ func MergeLayer(spec *RequestSpec, layer map[string]any) (*RequestSpec, error) {
 	}
 	if u, ok := layer["url"]; ok && u != nil {
 		s.Url = fmt.Sprintf("%v", u)
+	} else if p, ok := layer["path"]; ok && p != nil {
+		s.Url = fmt.Sprintf("%v", p)
 	}
 	if h, ok := layer["headers"].(map[string]any); ok {
 		s.Headers = MergeHeaders(s.Headers, h)
@@ -251,8 +253,15 @@ func MergeLayer(spec *RequestSpec, layer map[string]any) (*RequestSpec, error) {
 	if v, ok := layer["verify"]; ok {
 		s.Verify = v
 	}
-	if t, ok := layer["tests"]; ok && t != nil {
-		norm, err := NormaliseTests(t)
+	testLayer := layer["tests"]
+	if testLayer == nil {
+		testLayer = layer["assert"]
+	}
+	if testLayer == nil {
+		testLayer = layer["assertions"]
+	}
+	if testLayer != nil {
+		norm, err := NormaliseTests(testLayer)
 		if err != nil {
 			return nil, err
 		}
@@ -293,9 +302,11 @@ func LoadSpec(path string, defaults []map[string]any) (*RequestSpec, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, hasUrl := data["url"]; !hasUrl {
+	_, hasUrl := data["url"]
+	_, hasPath := data["path"]
+	if !hasUrl && !hasPath {
 		if _, hasMethod := data["method"]; !hasMethod {
-			return nil, zone.NewZoneError("%s: not a request (needs at least 'url')", path)
+			return nil, zone.NewZoneError("%s: not a request (needs at least 'url' or 'path')", path)
 		}
 	}
 

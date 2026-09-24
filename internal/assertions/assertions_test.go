@@ -139,3 +139,22 @@ func TestUnknownKeyAndBadPathFailGracefully(t *testing.T) {
 		}
 	}
 }
+
+func TestDeclarativeAssertionsStyle(t *testing.T) {
+	tests := []map[string]any{
+		{
+			"status":    201,
+			"latency":   "< 250ms",
+			"body.name": "Rex",
+		},
+	}
+	results := Evaluate(tests, resp)
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(results))
+	}
+	for _, r := range results {
+		if !r.Passed {
+			t.Errorf("expected test '%s' to pass, but failed: %s", r.Name, r.Detail)
+		}
+	}
+}

@@ -36,6 +36,24 @@ Download standalone cross-compiled release binaries from [**GitHub Releases**](h
 | **Linux** | ARM64 (`arm64`) | [`hit-linux-arm64.tar.gz`](https://github.com/hit-endpoint/hit-endpoint/releases/latest) |
 | **Windows** | x64 (`amd64`) | [`hit-windows-amd64.zip`](https://github.com/hit-endpoint/hit-endpoint/releases/latest) |
 
+##### Unpack and Install to PATH:
+```bash
+# 1. Unpack the archive
+tar -xzf hit-darwin-arm64.tar.gz  # or your platform archive
+
+# 2. macOS only: Clear browser quarantine attribute & ad-hoc sign (required on Apple Silicon)
+xattr -d com.apple.quarantine hit 2>/dev/null || true
+codesign -s - -f hit 2>/dev/null || true
+
+# 3. Move binary to your system PATH
+sudo mv hit /usr/local/bin/
+
+# 4. Verify installation
+hit --version
+```
+
+> **Why Option A is recommended on macOS**: When downloading archives through a web browser, macOS attaches a `com.apple.quarantine` extended attribute that causes Gatekeeper to block unsigned binaries. `install.sh` downloads directly via `curl`, applies ad-hoc codesigning, and installs to `/usr/local/bin` automatically.
+
 #### Option C: Go Install or Build from Source (Go 1.22+)
 ```bash
 # Via go install
@@ -151,7 +169,7 @@ For in-depth guides on every feature, explore the [**Documentation Library**](do
 | `hit assert <URL\|REF> [--save]` | Infers assertions automatically from live response |
 | `hit diff <ID1> [<ID2>]` | Diffs two requests semantically with normalized JSON |
 | `hit replay <ID>` | Replays a request from append-only local history log |
-| `hit report coverage [--html] [--har]` | Generates OpenAPI coverage audit, interactive HTML, or HAR 1.2 exports |
+| `hit report [coverage|html|har]` | Generates OpenAPI coverage audit, interactive HTML, or HAR 1.2 exports |
 | `hit snippet <REF\|URL> -l L` | Exports runnable code (Python, JS, Go, PHP) |
 | `hit mock [PORT] [--chaos] [--openapi S]` | Starts offline mock server with optional chaos controls & OpenAPI generation |
 | `hit graphql <URL> -q "..."` | Executes GraphQL query with error checks, or `--introspect` for SDL schema |

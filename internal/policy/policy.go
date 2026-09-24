@@ -284,6 +284,23 @@ func CheckRequestSpec(relPath string, sp *spec.RequestSpec, rawContent string, c
 						specifiedMs = float64(d.Milliseconds())
 					}
 				}
+			} else if lVal, ok := t["latency"]; ok {
+				switch lv := lVal.(type) {
+				case int:
+					specifiedMs = float64(lv)
+				case float64:
+					specifiedMs = lv
+				case string:
+					s := strings.TrimSpace(lv)
+					s = strings.TrimPrefix(s, "<=")
+					s = strings.TrimPrefix(s, "<")
+					s = strings.TrimSpace(s)
+					if d, err := time.ParseDuration(s); err == nil {
+						specifiedMs = float64(d.Milliseconds())
+					} else if f, err := strconv.ParseFloat(s, 64); err == nil {
+						specifiedMs = f
+					}
+				}
 			}
 			if specifiedMs > maxAllowedMs {
 				violations = append(violations, Violation{

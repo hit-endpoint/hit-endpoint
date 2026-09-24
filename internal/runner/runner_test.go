@@ -493,3 +493,49 @@ tests:
 		}
 	}
 }
+
+func TestDeclarativeSpecExecution(t *testing.T) {
+	mock := newMockPetstore()
+	server := httptest.NewServer(mock)
+	defer server.Close()
+
+	zonePath, cleanup := setupTestZone(t, server.URL)
+	defer cleanup()
+
+	declFile := filepath.Join(zonePath, "collections", "petstore", "declarative.yaml")
+	declYAML := `name: Declarative Health
+method: GET
+path: /health
+assert:
+  status: 200
+  latency: < 500ms
+  body.status: ok
+`
+	if err := os.WriteFile(declFile, []byte(declYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	z, err := zone.Find(zonePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sess, err := runner.NewSession(runner.SessionOptions{
+		Zone:       z,
+		ServerName: "local",
+		Persist:    false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	result := sess.Run("petstore/declarative", nil)
+	if !result.OK() {
+		t.Fatalf("expected declarative spec to pass, failed: %v, error: %s", result.FailedTests(), result.Error)
+	}
+	if len(result.Tests) != 4 {
+		t.Fatalf("expected 4 assertions (1 default + 3 spec), got %d", len(result.Tests))
+	}
+}
+

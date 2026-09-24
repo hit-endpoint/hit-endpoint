@@ -1697,6 +1697,17 @@ func cmdMock(args []string, p *output.Printer) error {
 			openapiSpec = strings.TrimPrefix(a, "--openapi=")
 		case a == "--stateless":
 			stateless = true
+		case a == "--chaos":
+			if chaos.FlakyRate == 0 {
+				chaos.FlakyRate = 0.20
+			}
+			if chaos.Latency == 0 {
+				chaos.Latency = 100 * time.Millisecond
+			}
+			if chaos.JitterMax == 0 {
+				chaos.JitterMin = 50 * time.Millisecond
+				chaos.JitterMax = 250 * time.Millisecond
+			}
 		case a == "--flaky" && i+1 < len(args):
 			rate, err := mock.ParseRate(args[i+1])
 			if err != nil {
@@ -3932,7 +3943,7 @@ func cmdReplay(args []string, globals *GlobalFlags, p *output.Printer) error {
 	}
 
 	if idOrIdx == "" {
-		return zone.NewZoneError("usage: hit replay <ID|INDEX> [-e ENV] [--var k=v] [-H k:v] [--diff] [--headers] [--body-only] [--json]")
+		return zone.NewZoneError("usage: hit replay <ID|INDEX> [-s SERVER] [--var k=v] [-H k:v] [--diff] [--headers] [--body-only] [--json]")
 	}
 	z, _ := zone.FindOrNone(globals.Zone)
 	zoneRoot := ""
@@ -4339,7 +4350,7 @@ func cmdReport(args []string, globals *GlobalFlags, p *output.Printer) error {
 		return nil
 
 	default:
-		return zone.NewZoneError("unknown report type '%s'. Available: html, coverage, latency", sub)
+		return zone.NewZoneError("unknown report type '%s'. Available: html, har, coverage, latency", sub)
 	}
 }
 
@@ -6622,6 +6633,14 @@ func cmdShorthand(args []string, globals *GlobalFlags, p *output.Printer) error 
 		}
 	}
 
+	hasURLFlag := false
+	for _, a := range args {
+		if a == "--url" || a == "-u" || strings.HasPrefix(a, "--url=") {
+			hasURLFlag = true
+			break
+		}
+	}
+
 	action := "ls"
 	var actionArgs []string
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
@@ -6630,10 +6649,18 @@ func cmdShorthand(args []string, globals *GlobalFlags, p *output.Printer) error 
 			action = args[0]
 			actionArgs = args[1:]
 		default:
-			action = "get"
-			actionArgs = args
+			if hasURLFlag {
+				action = "set"
+				actionArgs = args
+			} else {
+				action = "get"
+				actionArgs = args
+			}
 		}
 	} else if len(args) > 0 {
+		if hasURLFlag {
+			action = "set"
+		}
 		actionArgs = args
 	}
 
@@ -6719,12 +6746,19 @@ func cmdShorthand(args []string, globals *GlobalFlags, p *output.Printer) error 
 		for i := 0; i < len(actionArgs); i++ {
 			a := actionArgs[i]
 			switch {
+			case (a == "-u" || a == "--url") && i+1 < len(actionArgs):
+				target = actionArgs[i+1]
+				i++
+			case strings.HasPrefix(a, "--url="):
+				target = strings.TrimPrefix(a, "--url=")
 			case (a == "-m" || a == "--method") && i+1 < len(actionArgs):
 				method = strings.ToUpper(actionArgs[i+1])
 				i++
 			case (a == "-s" || a == "--server" || a == "-e" || a == "--env") && i+1 < len(actionArgs):
 				server = actionArgs[i+1]
 				i++
+			case strings.HasPrefix(a, "--server="):
+				server = strings.TrimPrefix(a, "--server=")
 			case (a == "-d" || a == "--description" || a == "--desc") && i+1 < len(actionArgs):
 				description = actionArgs[i+1]
 				i++
@@ -6746,11 +6780,17 @@ func cmdShorthand(args []string, globals *GlobalFlags, p *output.Printer) error 
 			}
 		}
 
-		if len(pos) < 2 {
+		if target == "" && len(pos) >= 2 {
+			name = pos[0]
+			target = pos[1]
+		} else if target != "" && len(pos) >= 1 {
+			name = pos[0]
+		} else if len(pos) >= 2 {
+			name = pos[0]
+			target = pos[1]
+		} else {
 			return zone.NewZoneError("usage: hit shorthand set <NAME> <URL|REF> [-m METHOD] [-s SERVER] [-H k:v] [--global]")
 		}
-		name = pos[0]
-		target = pos[1]
 
 		headersMap := make(map[string]string)
 		for _, h := range headersList {
