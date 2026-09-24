@@ -1,5 +1,7 @@
 # Binaries
-hit
+/hit
+/hit.exe
+dist/
 *.exe
 *.test
 
