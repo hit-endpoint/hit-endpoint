@@ -1,0 +1,76 @@
+# GoReleaser configuration for Hit Endpoint
+# Documentation: https://goreleaser.com
+version: 2
+
+project_name: hit
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: hit
+    main: ./cmd/hit
+    binary: hit
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.Version={{.Version}}
+
+archives:
+  - id: default
+    name_template: "hit-{{ .Os }}-{{ .Arch }}"
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE*
+      - reference.md
+      - docs/*
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "Merge pull request"
+      - "Merge branch"
+
+release:
+  github:
+    owner: hit-endpoint
+    name: hit-endpoint
+  draft: false
+  prerelease: auto
+  header: |
+    ## Hit Endpoint {{ .Tag }}
+    
+    Fast, Git-native API testing, load benchmarking, and offline mocking CLI in Go. Model Context Protocol (MCP) enabled.
+
+    ### Installation via One-Liner
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/hit-endpoint/hit-endpoint/main/install.sh | sh
+    ```

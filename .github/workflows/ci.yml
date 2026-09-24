@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+    tags-ignore: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint & Vet
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          check-latest: true
+
+      - name: Verify module tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: Go vet
+        run: go vet ./...
+
+  test:
+    name: Test (${{ matrix.os }}, Go ${{ matrix.go }})
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
+        go: [ '1.22', '1.23' ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          check-latest: true
+
+      - name: Run tests
+        run: go test -v ./...
+
+  cross-compile:
+    name: Cross-Compile Verification
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          check-latest: true
+
+      - name: Compile matrix
+        run: |
+          echo "Building linux/amd64..."
+          GOOS=linux GOARCH=amd64 go build -o /dev/null ./cmd/hit
+          echo "Building linux/arm64..."
+          GOOS=linux GOARCH=arm64 go build -o /dev/null ./cmd/hit
+          echo "Building darwin/arm64..."
+          GOOS=darwin GOARCH=arm64 go build -o /dev/null ./cmd/hit
+          echo "Building darwin/amd64..."
+          GOOS=darwin GOARCH=amd64 go build -o /dev/null ./cmd/hit
+          echo "Building windows/amd64..."
+          GOOS=windows GOARCH=amd64 go build -o /dev/null ./cmd/hit
+          echo "All cross-compilation targets built successfully!"

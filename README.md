@@ -1,11 +1,13 @@
 # Hit Endpoint (`hit`)
 
-> **23 Integrated Features** — Declarative, Git-native API testing, simulation, fuzzing, load testing, and fleet operations from the command line.
-
+[![CI](https://github.com/hit-endpoint/hit-endpoint/actions/workflows/ci.yml/badge.svg)](https://github.com/hit-endpoint/hit-endpoint/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/hit-endpoint/hit-endpoint?include_prereleases)](https://github.com/hit-endpoint/hit-endpoint/releases)
 [![Features](https://img.shields.io/badge/features-23%20integrated-blue.svg)](#-feature-matrix)
 [![Go Version](https://img.shields.io/badge/go-1.22%2B-00ADD8.svg)](https://go.dev)
-[![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen.svg)](#)
+
+> Fast, Git-native API testing, load benchmarking, and offline mocking CLI in Go. Model Context Protocol (MCP) enabled.
 
 A fast, compiled Go CLI delivering **23 production-ready testing features** in a single standalone binary. Requests are small, version-controlled YAML files stored directly in your repository—zero runtime dependencies, no UI overhead, no cloud account required, and no licensing hurdles.
 
@@ -15,11 +17,30 @@ A fast, compiled Go CLI delivering **23 production-ready testing features** in a
 
 ### 1. Install
 
+#### Option A: One-Liner Quick Install (macOS & Linux)
+Install the latest pre-compiled binary directly to `/usr/local/bin`:
+
 ```bash
-# Requires Go 1.22+
+curl -fsSL https://raw.githubusercontent.com/hit-endpoint/hit-endpoint/main/install.sh | sh
+```
+
+#### Option B: Download Pre-Built Binaries
+Download standalone cross-compiled release binaries from [**GitHub Releases**](https://github.com/hit-endpoint/hit-endpoint/releases/latest):
+
+| Platform | Architecture | Binary Archive |
+|---|---|---|
+| **macOS** | Apple Silicon (`arm64`) | [`hit-darwin-arm64.tar.gz`](https://github.com/hit-endpoint/hit-endpoint/releases/latest) |
+| **macOS** | Intel (`amd64`) | [`hit-darwin-amd64.tar.gz`](https://github.com/hit-endpoint/hit-endpoint/releases/latest) |
+| **Linux** | x86_64 (`amd64`) | [`hit-linux-amd64.tar.gz`](https://github.com/hit-endpoint/hit-endpoint/releases/latest) |
+| **Linux** | ARM64 (`arm64`) | [`hit-linux-arm64.tar.gz`](https://github.com/hit-endpoint/hit-endpoint/releases/latest) |
+| **Windows** | x64 (`amd64`) | [`hit-windows-amd64.zip`](https://github.com/hit-endpoint/hit-endpoint/releases/latest) |
+
+#### Option C: Go Install or Build from Source (Go 1.22+)
+```bash
+# Via go install
 go install github.com/hit-endpoint/hit-endpoint/cmd/hit@latest
 
-# Or build from source:
+# Or build from source
 git clone https://github.com/hit-endpoint/hit-endpoint.git
 cd hit-endpoint
 go build -o hit ./cmd/hit
