@@ -52,7 +52,13 @@ jobs:
           check-latest: true
 
       - name: Run tests
-        run: go test -v ./...
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            go test -v -ldflags="-linkmode=external" ./...
+          else
+            go test -v ./...
+          fi
 
   cross-compile:
     name: Cross-Compile Verification
