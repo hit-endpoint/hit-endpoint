@@ -155,8 +155,11 @@ func TestChaosLatencyAndJitter(t *testing.T) {
 	res, err := http.Get(ts.URL + "/health")
 	elapsed := time.Since(start)
 
-	if err != nil || res.StatusCode != 200 {
-		t.Fatalf("healthcheck failed: status=%d, err=%v", res.StatusCode, err)
+	if err != nil {
+		t.Fatalf("healthcheck failed: err=%v", err)
+	}
+	if res.StatusCode != 200 {
+		t.Fatalf("healthcheck failed: status=%d", res.StatusCode)
 	}
 	if elapsed < 40*time.Millisecond {
 		t.Errorf("expected at least 40ms elapsed with 50ms latency, got %v", elapsed)
@@ -174,8 +177,11 @@ func TestChaosAuthExpiration(t *testing.T) {
 	// 1. Login to get expiring token
 	loginBody := bytes.NewBufferString(`{"username":"admin","password":"hunter2"}`)
 	res, err := http.Post(ts.URL+"/auth/login", "application/json", loginBody)
-	if err != nil || res.StatusCode != 200 {
-		t.Fatalf("login failed: %v", res.StatusCode)
+	if err != nil {
+		t.Fatalf("login failed: err=%v", err)
+	}
+	if res.StatusCode != 200 {
+		t.Fatalf("login failed: status=%v", res.StatusCode)
 	}
 	var loginResp map[string]any
 	_ = json.NewDecoder(res.Body).Decode(&loginResp)
@@ -189,7 +195,10 @@ func TestChaosAuthExpiration(t *testing.T) {
 	req, _ := http.NewRequest("GET", ts.URL+"/pets", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	res, err = client.Do(req)
-	if err != nil || res.StatusCode != 200 {
+	if err != nil {
+		t.Fatalf("expected 200 before token expiration, err=%v", err)
+	}
+	if res.StatusCode != 200 {
 		t.Fatalf("expected 200 before token expiration, got %d", res.StatusCode)
 	}
 
@@ -224,24 +233,33 @@ func TestChaosHeaderOverrides(t *testing.T) {
 	req, _ := http.NewRequest("GET", ts.URL+"/health", nil)
 	req.Header.Set("X-Hit-Chaos-Status", "503")
 	res, err := client.Do(req)
-	if err != nil || res.StatusCode != 503 {
-		t.Fatalf("expected 503 from X-Hit-Chaos-Status, got status=%d, err=%v", res.StatusCode, err)
+	if err != nil {
+		t.Fatalf("expected 503 from X-Hit-Chaos-Status, err=%v", err)
+	}
+	if res.StatusCode != 503 {
+		t.Fatalf("expected 503 from X-Hit-Chaos-Status, got status=%d", res.StatusCode)
 	}
 
 	// Force 429 via header
 	req, _ = http.NewRequest("GET", ts.URL+"/health", nil)
 	req.Header.Set("X-Hit-Chaos-RateLimit", "true")
 	res, err = client.Do(req)
-	if err != nil || res.StatusCode != 429 {
-		t.Fatalf("expected 429 from X-Hit-Chaos-RateLimit, got status=%d, err=%v", res.StatusCode, err)
+	if err != nil {
+		t.Fatalf("expected 429 from X-Hit-Chaos-RateLimit, err=%v", err)
+	}
+	if res.StatusCode != 429 {
+		t.Fatalf("expected 429 from X-Hit-Chaos-RateLimit, got status=%d", res.StatusCode)
 	}
 
 	// Force payload corruption via header
 	req, _ = http.NewRequest("GET", ts.URL+"/health", nil)
 	req.Header.Set("X-Hit-Chaos-Corrupt", "true")
 	res, err = client.Do(req)
-	if err != nil || res.StatusCode != 200 {
-		t.Fatalf("expected 200, got status=%d, err=%v", res.StatusCode, err)
+	if err != nil {
+		t.Fatalf("expected 200, err=%v", err)
+	}
+	if res.StatusCode != 200 {
+		t.Fatalf("expected 200, got status=%d", res.StatusCode)
 	}
 	if res.Header.Get("X-Hit-Chaos") != "corrupt" {
 		t.Errorf("expected X-Hit-Chaos: corrupt header, got %s", res.Header.Get("X-Hit-Chaos"))

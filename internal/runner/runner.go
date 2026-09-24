@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hit-endpoint/hit-endpoint/internal/assertions"
@@ -30,6 +31,7 @@ var stepKeys = map[string]bool{
 }
 
 type Session struct {
+	mu             sync.RWMutex
 	Zone           *zone.Zone
 	Server         *zone.Server
 	Persist        bool
@@ -128,17 +130,37 @@ func NewSession(opts SessionOptions) (*Session, error) {
 	}, nil
 }
 
+func (s *Session) recordResult(r *types.Result) {
+	if s.NoHistory {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.History = append(s.History, r)
+}
+
 func (s *Session) Context(requestVars map[string]any, stepVars map[string]any) *templating.Context {
 	wsVars := make(map[string]any)
 	if s.Zone != nil {
 		wsVars = s.Zone.Vars()
 	}
+	s.mu.RLock()
+	sessionVarsCopy := make(map[string]any, len(s.SessionVars))
+	for k, v := range s.SessionVars {
+		sessionVarsCopy[k] = v
+	}
+	flowVarsCopy := make(map[string]any, len(s.FlowVars))
+	for k, v := range s.FlowVars {
+		flowVarsCopy[k] = v
+	}
+	s.mu.RUnlock()
+
 	layers := []templating.Layer{
 		{Name: "zone", Values: wsVars},
 		{Name: "server", Values: s.Server.Vars},
 		{Name: "request", Values: requestVars},
-		{Name: "session", Values: s.SessionVars},
-		{Name: "flow", Values: s.FlowVars},
+		{Name: "session", Values: sessionVarsCopy},
+		{Name: "flow", Values: flowVarsCopy},
 		{Name: "step", Values: stepVars},
 		{Name: "cli", Values: s.CliVars},
 	}
@@ -146,7 +168,10 @@ func (s *Session) Context(requestVars map[string]any, stepVars map[string]any) *
 }
 
 func (s *Session) SetVar(name string, value any, persist *bool) {
+	s.mu.Lock()
 	s.SessionVars[name] = value
+	s.mu.Unlock()
+
 	p := s.Persist
 	if persist != nil {
 		p = *persist
@@ -162,6 +187,8 @@ func (s *Session) Variables() map[string]any {
 }
 
 func (s *Session) Clone() *Session {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	sessionVars := make(map[string]any, len(s.SessionVars))
 	for k, v := range s.SessionVars {
 		sessionVars[k] = v
@@ -201,7 +228,22 @@ func (s *Session) Client(verify any, timeoutSec float64) *http.Client {
 		verify = s.VerifyOverride
 	}
 	key := fmt.Sprintf("%v:%.1f", verify, timeoutSec)
-	if c, ok := s.Clients[key]; ok {
+
+	s.mu.RLock()
+	if s.Clients != nil {
+		if c, ok := s.Clients[key]; ok && c != nil {
+			s.mu.RUnlock()
+			return c
+		}
+	}
+	s.mu.RUnlock()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.Clients == nil {
+		s.Clients = make(map[string]*http.Client)
+	} else if c, ok := s.Clients[key]; ok && c != nil {
 		return c
 	}
 
@@ -279,7 +321,7 @@ func (s *Session) Run(ref string, step map[string]any) *types.Result {
 			Ref:   ref,
 			Error: err.Error(),
 		}
-		s.History = append(s.History, r)
+		s.recordResult(r)
 		return r
 	}
 	return s.RunSpec(sp, step)
@@ -336,7 +378,7 @@ func (s *Session) Request(method, reqURL string, headers map[string]any, query m
 			Url:    reqURL,
 			Error:  err.Error(),
 		}
-		s.History = append(s.History, r)
+		s.recordResult(r)
 		return r
 	}
 	return s.RunSpec(sp, nil)
@@ -437,7 +479,7 @@ func (s *Session) RunSpec(sp *spec.RequestSpec, step map[string]any) *types.Resu
 				Url:    sp.Url,
 				Error:  fmt.Sprintf("matrix error: %v", err),
 			}
-			s.History = append(s.History, r)
+			s.recordResult(r)
 			return r
 		}
 		if len(rows) > 0 {
@@ -486,7 +528,7 @@ func (s *Session) runSingleSpec(sp *spec.RequestSpec, step map[string]any) *type
 			Url:    sp.Url,
 			Error:  err.Error(),
 		}
-		s.History = append(s.History, r)
+		s.recordResult(r)
 		return r
 	}
 
@@ -501,7 +543,7 @@ func (s *Session) runSingleSpec(sp *spec.RequestSpec, step map[string]any) *type
 				Url:    prepared.FullURL(),
 				Error:  fmt.Sprintf("before hook failed: %v", err),
 			}
-			s.History = append(s.History, r)
+			s.recordResult(r)
 			return r
 		}
 	}
@@ -523,13 +565,14 @@ func (s *Session) runSingleSpec(sp *spec.RequestSpec, step map[string]any) *type
 		CaptureErrors:  make(map[string]string),
 	}
 
-	client := s.Client(prepared.Verify, prepared.Timeout)
+	baseClient := s.Client(prepared.Verify, prepared.Timeout)
+	reqClient := *baseClient
 	if !prepared.FollowRedirects {
-		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		reqClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		}
 	} else {
-		client.CheckRedirect = nil
+		reqClient.CheckRedirect = nil
 	}
 
 	var reqBody io.Reader
@@ -545,7 +588,7 @@ func (s *Session) runSingleSpec(sp *spec.RequestSpec, step map[string]any) *type
 		b, ct, err := spec.BuildMultipartBody(prepared.Data, prepared.Files)
 		if err != nil {
 			result.Error = err.Error()
-			s.History = append(s.History, result)
+			s.recordResult(result)
 			return result
 		}
 		reqBody = bytes.NewReader(b)
@@ -555,7 +598,7 @@ func (s *Session) runSingleSpec(sp *spec.RequestSpec, step map[string]any) *type
 	req, err := http.NewRequest(prepared.Method, prepared.FullURL(), reqBody)
 	if err != nil {
 		result.Error = err.Error()
-		s.History = append(s.History, result)
+		s.recordResult(result)
 		return result
 	}
 
@@ -564,12 +607,12 @@ func (s *Session) runSingleSpec(sp *spec.RequestSpec, step map[string]any) *type
 	}
 
 	start := time.Now()
-	resp, err := client.Do(req)
+	resp, err := reqClient.Do(req)
 	result.ElapsedMs = float64(time.Since(start).Nanoseconds()) / 1e6
 
 	if err != nil {
 		result.Error = err.Error()
-		s.History = append(s.History, result)
+		s.recordResult(result)
 		return result
 	}
 	defer resp.Body.Close()
@@ -611,7 +654,9 @@ func (s *Session) runSingleSpec(sp *spec.RequestSpec, step map[string]any) *type
 			continue
 		}
 		result.Captures[key] = val
+		s.mu.Lock()
 		s.SessionVars[key] = val
+		s.mu.Unlock()
 	}
 
 	// Tests
@@ -621,10 +666,12 @@ func (s *Session) runSingleSpec(sp *spec.RequestSpec, step map[string]any) *type
 	if afterScript, ok := rendered.Hooks["after"]; ok && afterScript != "" {
 		hookPath := s.hookPath(sp, afterScript)
 		testRes, capturesUpdate := runAfterHook(hookPath, result, ctx)
+		s.mu.Lock()
 		for k, v := range capturesUpdate {
 			s.SessionVars[k] = v
 			result.Captures[k] = v
 		}
+		s.mu.Unlock()
 		result.Tests = append(result.Tests, testRes)
 	}
 
@@ -633,7 +680,7 @@ func (s *Session) runSingleSpec(sp *spec.RequestSpec, step map[string]any) *type
 		_ = s.State.Save()
 	}
 
-	s.History = append(s.History, result)
+	s.recordResult(result)
 
 	if !s.NoHistory && s.HistoryStore != nil {
 		zoneName := ""

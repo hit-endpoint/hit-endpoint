@@ -291,6 +291,10 @@ func (ws *WorkerServer) runHubEnrollmentAndHeartbeat(l net.Listener) {
 	hbURL := fmt.Sprintf("%s/api/v1/nodes/%s/heartbeat", strings.TrimRight(ws.HubURL, "/"), ws.ID)
 	queueURL := fmt.Sprintf("%s/api/v1/nodes/%s/queue?region=%s", strings.TrimRight(ws.HubURL, "/"), ws.ID, url.QueryEscape(ws.Region))
 
+	ws.mu.Lock()
+	stopCh := ws.stopHB
+	ws.mu.Unlock()
+
 	for {
 		select {
 		case <-hbTicker.C:
@@ -368,7 +372,7 @@ func (ws *WorkerServer) runHubEnrollmentAndHeartbeat(l net.Listener) {
 				go ws.executeDispatchedJob(j.ID, j.Type, j.Name, j.SpecYAML, j.Concurrency, j.Requests, j.DurationS)
 			}
 
-		case <-ws.stopHB:
+		case <-stopCh:
 			return
 		}
 	}

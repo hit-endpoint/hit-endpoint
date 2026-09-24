@@ -73,9 +73,9 @@ func RunPerf(session *runner.Session, sp *spec.RequestSpec, opts PerfOptions) (*
 		time.AfterFunc(time.Duration(opts.Duration*float64(time.Second)), cancel)
 	}
 
-	oneCall := func(record bool) {
+	oneCall := func(sess *runner.Session, record bool) {
 		t0 := time.Now()
-		r := session.RunSpec(sp, nil)
+		r := sess.RunSpec(sp, nil)
 		ms := float64(time.Since(t0).Nanoseconds()) / 1e6
 		if !record {
 			return
@@ -130,9 +130,10 @@ func RunPerf(session *runner.Session, sp *spec.RequestSpec, opts PerfOptions) (*
 		var wg sync.WaitGroup
 		for i := 0; i < opts.Warmup; i++ {
 			wg.Add(1)
+			wSess := session.Clone()
 			go func() {
 				defer wg.Done()
-				oneCall(false)
+				oneCall(wSess, false)
 			}()
 		}
 		wg.Wait()
@@ -166,7 +167,8 @@ func RunPerf(session *runner.Session, sp *spec.RequestSpec, opts PerfOptions) (*
 	var wg sync.WaitGroup
 	for workerID := 0; workerID < concurrency; workerID++ {
 		wg.Add(1)
-		go func(id int) {
+		wSess := session.Clone()
+		go func(id int, sess *runner.Session) {
 			defer wg.Done()
 			if opts.RampUp > 0 && id > 0 {
 				delaySec := (float64(id) / float64(concurrency)) * opts.RampUp
@@ -204,9 +206,9 @@ func RunPerf(session *runner.Session, sp *spec.RequestSpec, opts PerfOptions) (*
 					nextSlot = nextSlot.Add(time.Duration(interval * float64(time.Second)))
 				}
 
-				oneCall(true)
+				oneCall(sess, true)
 			}
-		}(workerID)
+		}(workerID, wSess)
 	}
 
 	wg.Wait()
