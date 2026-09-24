@@ -60,9 +60,6 @@ changelog:
       - "Merge branch"
 
 release:
-  github:
-    owner: hit-endpoint
-    name: hit-endpoint
   draft: false
   prerelease: auto
   header: |
