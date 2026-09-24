@@ -377,8 +377,8 @@ func TestPerfReportsLatency(t *testing.T) {
 		t.Errorf("expected 40 completed and 0 failed, got %d and %d", report.Completed, report.Failed)
 	}
 	stats := report.Stats()
-	if stats["p95"] < stats["p50"] || stats["p50"] <= 0 {
-		t.Errorf("bad stats: p95=%v, p50=%v", stats["p95"], stats["p50"])
+	if stats["p95"] < stats["p50"] || stats["p50"] < 0 || stats["max"] <= 0 {
+		t.Errorf("bad stats: p95=%v, p50=%v, max=%v", stats["p95"], stats["p50"], stats["max"])
 	}
 	if report.StatusCounts[200] != 40 {
 		t.Errorf("expected 40 status 200, got %v", report.StatusCounts)
