@@ -4,7 +4,8 @@
 [![Release](https://img.shields.io/github/v/release/hit-endpoint/hit-endpoint?include_prereleases)](https://github.com/hit-endpoint/hit-endpoint/releases)
 [![Features](https://img.shields.io/badge/features-23%20integrated-blue.svg)](#-feature-matrix)
 [![Go Version](https://img.shields.io/badge/go-1.22%2B-00ADD8.svg)](https://go.dev)
-[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
+[![License: Apache 2.0 with Commons Clause](https://img.shields.io/badge/license-Apache%202.0%20w%2F%20Commons%20Clause-blue.svg)](LICENSE)
+[![Security Policy](https://img.shields.io/badge/security-policy%20active-success.svg)](SECURITY.md)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen.svg)](#)
 
 > Fast, Git-native API testing, load benchmarking, and offline mocking CLI in Go. Model Context Protocol (MCP) enabled.
@@ -220,3 +221,18 @@ hit-endpoint/
 ├── learn/            # 7-lesson interactive curriculum + glossary
 └── prompts/          # Optimized LLM prompts for test/request generation
 ```
+
+---
+
+## 🔒 Security
+
+We take vulnerability management and secure credential handling seriously. Please review our [**Security Policy**](SECURITY.md) for details on supported versions, vulnerability disclosure procedures, and response SLAs. To report a security issue privately, please open a [GitHub Private Vulnerability Report](https://github.com/hit-endpoint/hit-endpoint/security/advisories/new) or contact `majordan1973@gmail.com`.
+
+---
+
+## 📜 License
+
+This project is licensed under the [**Apache License, Version 2.0 with Commons Clause 1.0**](LICENSE).
+
+* **You are free to**: Read, inspect, fork, modify, test, automate, and run `hit` across developer workstations, internal enterprise CI/CD pipelines, and private servers at no cost.
+* **You are NOT permitted to**: Sell the software, sublicense it for a fee, or sell commercial products/hosted services whose value is primarily derived from `hit`.

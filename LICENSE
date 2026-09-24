@@ -1,3 +1,17 @@
+The Software is provided to you by the Licensor under the License, as amended by the Commons Clause Condition below without additional terms or conditions.
+
+Commons Clause License Condition v1.0
+
+The Software is provided to you by the Licensor under the License, as amended by this Commons Clause Condition, which adds the following condition to the License:
+
+Without limiting other conditions in the License, the grant of rights under the License will not include, and does not grant to you, the right to Sell the Software.
+
+For purposes of the foregoing, "Sell" means practicing any or all of the rights granted to you by the License to provide, for a fee or other commercial consideration, the Software or products or services whose value is entirely or primarily derived from the Software.
+
+In the event of any conflict between the License and this Commons Clause Condition, the Commons Clause Condition shall prevail.
+
+================================================================================
+
                                  Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -174,17 +188,3 @@
       of your accepting any such warranty or additional liability.
 
    END OF TERMS AND CONDITIONS
-
-   Copyright 2026 Hit Endpoint Contributors
-
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
-
-       http://www.apache.org/licenses/LICENSE-2.0
-
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
