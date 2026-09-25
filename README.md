@@ -206,7 +206,7 @@ hit-endpoint/
 
 ## 🔒 Security
 
-We take vulnerability management and secure credential handling seriously. Please review our [**Security Policy**](SECURITY.md) for details on supported versions, vulnerability disclosure procedures, and response SLAs. To report a security issue privately, please open a [GitHub Private Vulnerability Report](https://github.com/hit-endpoint/hit-endpoint/security/advisories/new) or contact `majordan1973@gmail.com`.
+We take vulnerability management and secure credential handling seriously. Please review our [**Security Policy**](SECURITY.md) for details on supported versions, vulnerability disclosure procedures, and response SLAs. To report a security issue privately, please open a [GitHub Private Vulnerability Report](https://github.com/hit-endpoint/hit-endpoint/security/advisories/new) or contact `305618344+mrmockdock@users.noreply.github.com`.
 
 ---
 

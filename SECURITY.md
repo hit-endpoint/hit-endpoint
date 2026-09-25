@@ -33,7 +33,7 @@ Submit a confidential advisory directly to repository maintainers:
 
 ### 2. Direct Security Contact
 If you cannot use GitHub Security Advisories, send an encrypted or direct email to:
-* **Contact**: Mark Jordan (`majordan1973@gmail.com`)
+* **Contact**: Mark Jordan (`305618344+mrmockdock@users.noreply.github.com`)
 * **Subject line**: `[SECURITY VULNERABILITY] hit-endpoint: <brief description>`
 
 ---
