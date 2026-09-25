@@ -39,19 +39,23 @@ Hit Endpoint discovers the active zone by walking upwards from your current work
 
 ---
 
-## Zone Creation Wizard (`hit wizard` / `hit zone new`)
+## Zone Creation Wizard (`hit init` / `hit wizard`)
 
-To scaffold a complete, boilerplate zone layout with zero guesswork, run the creation wizard:
+To scaffold a complete, boilerplate zone layout with zero guesswork, run `hit init`:
 
 ```bash
-# Interactive wizard (prompts for zone name & base URL, with immediate defaults)
+# Initialize a new zone in a specific directory
+hit init my-api-zone
+
+# Initialize inside your current directory (e.g. tests/api/ in your app repo)
+hit init .
+
+# Non-interactive mode with immediate defaults (no prompts)
+hit init my-api-zone -y
+
+# Alternatively, using wizard or zone new aliases:
 hit wizard my-api-zone
-
-# Non-interactive mode (uses defaults immediately, no prompts)
-hit wizard my-api-zone -y
-
-# Alternatively, using the zone subcommand:
-hit zone new my-api-zone -y
+hit zone new my-api-zone
 ```
 
 The wizard sets up:

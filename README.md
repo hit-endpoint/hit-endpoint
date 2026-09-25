@@ -55,14 +55,49 @@ hit POST https://httpbin.org/post -j '{"name": "Rex", "type": "dog"}'
 hit POST https://httpbin.org/post -f user=admin -f pass=secret --auth basic:admin:secret --status 200
 ```
 
+### 4. Create an API Zone (`hit init`)
+
+To organize, version-control, and automate tests for your application, initialize an **API Zone** (a directory containing a `zone.yaml` file, similar to a Git repository containing `.git`):
+
+```bash
+# In your existing application repo (e.g., tests/api):
+mkdir -p tests/api && cd tests/api
+hit init .
+
+# Or as a standalone directory:
+hit init my-api
+cd my-api
+```
+
+This scaffolds the standard directory layout:
+
+```text
+my-api/
+├── zone.yaml                        # Zone config (name, default server, global vars)
+├── servers/                         # Environment targets (base URLs & auth)
+│   ├── local.yaml                   # e.g. base_url: http://127.0.0.1:8000
+│   └── production.yaml              # e.g. base_url: https://api.example.com
+├── collections/                     # 📂 SAVE YOUR REQUEST YAML FILES HERE!
+│   └── default/
+│       ├── _defaults.yaml           # Shared headers for this collection
+│       ├── 00-health.yaml           # Individual request definition
+│       └── 01-get-sample.yaml
+├── chains/                          # Multi-step sequential scenario flows
+│   └── smoke.yaml
+└── shorthands.yaml                  # Quick CLI aliases (e.g. hit health)
+```
+
+> 💡 **Auto-Discovery**: `hit` automatically discovers your zone by walking upwards from your current working directory to find `zone.yaml` (just like `git` finds `.git`). You can run commands from anywhere inside the zone, or pass `-z /path/to/zone` from anywhere outside.
+
 ---
 
 ## 📄 Declarative YAML Requests
 
-Organize your APIs into version-controlled files under a **Zone** (a self-contained directory representing an API workspace—housing base URLs, environment secrets, and collections).
+Save your request definitions as `.yaml` files inside `collections/<collection-name>/` (e.g. `collections/users/get-user.yaml`). Numeric prefixes (e.g. `01-`, `02-`) dictate execution order when running an entire collection.
 
 ```yaml
 # collections/users/get-user.yaml
+name: Get User Profile
 method: GET
 path: /users/{{user_id}}
 headers:
@@ -76,7 +111,14 @@ assert:
 Run it across environments instantly:
 
 ```bash
-hit run collections/users/get-user.yaml -s staging
+# Runs against the default server:
+hit run users/get-user
+
+# Runs against a specific server environment (e.g. staging or production):
+hit run users/get-user -s staging
+
+# Run all requests in a collection:
+hit run users
 ```
 
 ---
