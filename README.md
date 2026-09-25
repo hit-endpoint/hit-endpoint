@@ -18,52 +18,14 @@ A fast, compiled Go CLI delivering **23 production-ready testing features** in a
 
 ### 1. Install
 
-#### Option A: One-Liner Quick Install (macOS & Linux)
+#### One-Liner Quick Install (macOS & Linux)
 Install the latest pre-compiled binary directly to `/usr/local/bin`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/hit-endpoint/hit-endpoint/main/install.sh | sh
 ```
 
-#### Option B: Download Pre-Built Binaries
-Download standalone cross-compiled release binaries from [**GitHub Releases**](https://github.com/hit-endpoint/hit-endpoint/releases/latest):
-
-| Platform | Architecture | Binary Archive |
-|---|---|---|
-| **macOS** | Apple Silicon (`arm64`) | [`hit-darwin-arm64.tar.gz`](https://github.com/hit-endpoint/hit-endpoint/releases/latest) |
-| **macOS** | Intel (`amd64`) | [`hit-darwin-amd64.tar.gz`](https://github.com/hit-endpoint/hit-endpoint/releases/latest) |
-| **Linux** | x86_64 (`amd64`) | [`hit-linux-amd64.tar.gz`](https://github.com/hit-endpoint/hit-endpoint/releases/latest) |
-| **Linux** | ARM64 (`arm64`) | [`hit-linux-arm64.tar.gz`](https://github.com/hit-endpoint/hit-endpoint/releases/latest) |
-| **Windows** | x64 (`amd64`) | [`hit-windows-amd64.zip`](https://github.com/hit-endpoint/hit-endpoint/releases/latest) |
-
-##### Unpack and Install to PATH:
-```bash
-# 1. Unpack the archive
-tar -xzf hit-darwin-arm64.tar.gz  # or your platform archive
-
-# 2. macOS only: Clear browser quarantine attribute & ad-hoc sign (required on Apple Silicon)
-xattr -d com.apple.quarantine hit 2>/dev/null || true
-codesign -s - -f hit 2>/dev/null || true
-
-# 3. Move binary to your system PATH
-sudo mv hit /usr/local/bin/
-
-# 4. Verify installation
-hit --version
-```
-
-> **Why Option A is recommended on macOS**: When downloading archives through a web browser, macOS attaches a `com.apple.quarantine` extended attribute that causes Gatekeeper to block unsigned binaries. `install.sh` downloads directly via `curl`, applies ad-hoc codesigning, and installs to `/usr/local/bin` automatically.
-
-#### Option C: Go Install or Build from Source (Go 1.22+)
-```bash
-# Via go install
-go install github.com/hit-endpoint/hit-endpoint/cmd/hit@latest
-
-# Or build from source
-git clone https://github.com/hit-endpoint/hit-endpoint.git
-cd hit-endpoint
-go build -o hit ./cmd/hit
-```
+> 📦 **Alternative Platforms & Methods**: Looking for pre-built binaries (Apple Silicon/Intel, Linux, Windows), `go install`, or compiling from source? See the [**Detailed Installation Guide (INSTALL.md)**](INSTALL.md) for download links, checksums, Windows PATH setup, and Gatekeeper signing notes.
 
 HTTPS uses your OS root certificate store. Pass `-k` or `--insecure` to skip verification for self-signed certificates.
 
