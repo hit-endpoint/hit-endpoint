@@ -19,6 +19,7 @@ A fast, compiled Go CLI delivering **23 production-ready testing features** in a
 ### Overview
 * **A. Basic Install**: Run the [One-Liner Quick Install](#one-liner-quick-install-macos--linux) (macOS & Linux) or read the [Detailed Installation Guide (INSTALL.md)](INSTALL.md).
 * **B. Using Zones or using it in a Project**: Run the command `hit init` in your project's directory (see [Step 4: Create an API Zone](#4-create-an-api-zone-hit-init)).
+* **C. Need Help?**: Run the command `hit help` (or `hit help <command>` for detailed command syntax, flags, and examples).
 
 ### 1. Install
 
