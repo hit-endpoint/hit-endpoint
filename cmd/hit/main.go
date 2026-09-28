@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	internalAuth "github.com/hit-endpoint/hit-endpoint/internal/auth"
 	"github.com/hit-endpoint/hit-endpoint/internal/assertions"
 	"github.com/hit-endpoint/hit-endpoint/internal/cost"
 	"github.com/hit-endpoint/hit-endpoint/internal/diff"
@@ -127,7 +128,7 @@ func run(args []string) int {
 		case arg == "--version" || arg == "-V":
 			fmt.Printf("hit %s\n", Version)
 			return ExitOK
-		case arg == "--help" || arg == "-h":
+		case (arg == "--help" || arg == "-h") && len(args) == 1:
 			printHelp(nil)
 			return ExitOK
 		case arg == "-z" || arg == "--zone" || arg == "-w":
@@ -247,6 +248,7 @@ func isURLOrPath(s string) bool {
 func isKnownSubcommand(s string) bool {
 	switch s {
 	case "help", "--help", "-h",
+		"auth", "token", "cookie",
 		"wizard", "zone",
 		"reference", "docs",
 		"schema",
@@ -331,75 +333,26 @@ func isAdhocInvocation(cmd string, args []string) bool {
 }
 
 func printHelp(p *output.Printer) {
-	fmt.Print(`Hit Endpoint - A file-based, git-friendly API tester and runner.
-
-Usage:
-  hit [METHOD] URL [-H k:v] [-q k=v] [-j JSON|@file] [-b TEXT|@file] [--auth ...]
-  hit body [METHOD] URL ...
-  hit code [METHOD] URL ...
-  hit time [METHOD] URL [--ms]
-  hit headers [METHOD] URL ...
-  hit response [METHOD] URL ...
-  hit run REF... [-s SERVER] [--junit FILE] [--webhook-on-failure URL] [--publish] [--enforce-policy]
-                 [--format=github|agent] [--html FILE] [--har FILE] [--var k=v]
-                 [--json] [--body] [--code] [--time] [-v] [--headers] [--quiet] [--full]
-  hit schedule <URL|REF> [--at TIME] [--every INTERVAL] [-n COUNT] [--status CODE] [--expect PATTERN]
-  hit probe [run|daemon|test-alert] <FILE|REF> [--regions LIST] [--consensus N] [--interval D] [--json]
-  hit shorthand [ls] [--json]
-  hit shorthand set <NAME> <URL|REF> [-m METHOD] [-s SERVER] [-H k:v]
-  hit shorthand rm <NAME>
-  hit ls [FOLDER] [--json]
-  hit servers
-  hit vars [set K V | unset K | clear] [--all]
-  hit show REF [--curl] [--json] [--lang python|php|js|go] [--extract PATH]
-  hit snippet <REF|URL> [--lang python|php|js|go|all] [--extract PATH]
-  hit fuzz <REF|URL> [-n N] [--categories CATS] [--fail-on-5xx] [--sarif FILE] [--json] [-v]
-  hit validate [REF|FOLDER ...] [--json]
-  hit sanity [COLLECTION] [--offline] [--json]
-  perf REF [-c N] [-n N | -d SECONDS] [--workers LIST] [--distribute N] [--threshold SPEC] [--check] [--junit FILE] [--csv FILE] [--json]
-  hit perf worker [--port PORT] [--region REGION]
-  hit history [ls] [--limit N] [--status N] [--ref PATTERN] [--json]
-  hit history show <ID|INDEX> [--json]
-  hit history save <ID|INDEX> <FILE.yaml> [--infer]
-  hit history clear
-  hit replay <ID|INDEX> [-s SERVER] [--var k=v] [--diff] [--headers] [--body-only] [--json]
-  hit diff <ID|INDEX> [<ID|INDEX>] [--headers] [--body-only] [--json] [--context N]
-  hit report html [-o FILE] [-n LIMIT]
-  hit report har [-o FILE] [-n LIMIT] [--status N] [--ref PATTERN]
-  hit report coverage --openapi SPEC [--json]
-  hit report latency [-t THRESHOLD%] [--json]
-  hit assert <URL|ID|REF> [--save [FILE]] [--append [FILE]] [--strict] [--no-latency] [--no-headers] [--json]
-  hit graphql <URL|REF> [-q QUERY|@file] [-v VARS|@file] [-o OP] [--introspect] [--sdl] [--fail-on-errors] [--json]
-  hit sse <URL> [-H k:v] [-n MAX] [-d TIMEOUT] [--event NAME] [--json]
-  hit ws <URL> [-H k:v] [-m MSG]... [--expect PATTERN] [-d TIMEOUT] [--json]
-  hit mock [PORT] [--openapi SPEC] [--stateless] [--flaky RATE] [--rate-limit N/s] [--latency D] [--jitter RANGE] [--auth-expire D]
-  hit hub [--port PORT] [--dir DIR] [--api-key KEY] [--project ID]
-  hit cost [<REF|FILE>] [-n CALLS] [--tiers SPEC] [--pricing FILE] [--preset NAME] [--budget AMOUNT]
-  hit mcp
-  hit schema [request|chain|zone|graphql <URL>]
-  hit new REF [-m METHOD] [-u URL] [--infer]
-  hit import [collection|openapi|curl|env|globals] FILE...
-  hit wizard [DIR] [--name NAME] [--url URL] [-y]
-  hit zone new [DIR] [--name NAME] [--url URL] [-y]
-  hit init [DIR] [--wizard]
-  hit learn [verify [1-7|all]] [--mock URL]
-  hit reference
-
-Global options:
-  -z, --zone DIR        Zone directory
-  -s, --server SERVER   Server name
-  --var KEY=VALUE       Override variable (repeatable)
-  -k, --insecure        Skip TLS certificate verification
-  --no-color            Disable colored output
-  --no-history          Do not record requests to history
-`)
+	showGeneralHelp(p)
 }
 
 func dispatch(cmd string, args []string, globals *GlobalFlags, p *output.Printer) error {
+	if hasHelpFlag(args) && cmd != "help" && cmd != "--help" && cmd != "-h" {
+		showCommandHelp(cmd, p)
+		return nil
+	}
+
 	switch cmd {
 	case "help", "--help", "-h":
-		printHelp(p)
+		if len(args) > 0 {
+			showCommandHelp(args[0], p)
+			return nil
+		}
+		showGeneralHelp(p)
 		return nil
+
+	case "auth", "token", "cookie":
+		return cmdAuth(args, globals, p)
 
 	case "learn", "tutorial":
 		return cmdLearn(args, globals, p)
@@ -857,7 +810,7 @@ func cmdAdhoc(cmd string, args []string, globals *GlobalFlags, p *output.Printer
 		parts := strings.SplitN(authStr, ":", 2)
 		kind := strings.ToLower(parts[0])
 		switch kind {
-		case "bearer":
+		case "bearer", "token", "jwt":
 			rest := ""
 			if len(parts) > 1 {
 				rest = parts[1]
@@ -873,10 +826,34 @@ func cmdAdhoc(cmd string, args []string, globals *GlobalFlags, p *output.Printer
 				}
 			}
 			auth = map[string]any{"type": "basic", "username": user, "password": pass}
+		case "cookie":
+			rest := ""
+			if len(parts) > 1 {
+				rest = parts[1]
+			}
+			headers["Cookie"] = rest
 		case "none":
 			auth = "none"
 		default:
-			return zone.NewZoneError("--auth must be bearer:TOKEN, basic:USER:PASS or none")
+			return zone.NewZoneError("--auth must be bearer:TOKEN, basic:USER:PASS, cookie:COOKIE or none")
+		}
+	} else if headers["Authorization"] == "" && headers["authorization"] == "" {
+		if tok, ok := sess.SessionVars["token"].(string); ok && tok != "" {
+			auth = map[string]any{"type": "bearer", "token": tok}
+		} else {
+			if ga, _ := internalAuth.LoadGlobalAuth(); ga != nil && ga.Token != "" {
+				auth = map[string]any{"type": "bearer", "token": ga.Token}
+			}
+		}
+	}
+
+	if headers["Cookie"] == "" && headers["cookie"] == "" {
+		if ck, ok := sess.SessionVars["cookie"].(string); ok && ck != "" {
+			headers["Cookie"] = ck
+		} else {
+			if ga, _ := internalAuth.LoadGlobalAuth(); ga != nil && ga.Cookie != "" {
+				headers["Cookie"] = ga.Cookie
+			}
 		}
 	}
 
@@ -2320,6 +2297,28 @@ func cmdHub(args []string, p *output.Printer) error {
 			i++
 		case strings.HasPrefix(a, "--url="):
 			cfg.PublicURL = strings.TrimPrefix(a, "--url=")
+		case a == "--logo" && i+1 < len(args):
+			cfg.LogoURL = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--logo="):
+			cfg.LogoURL = strings.TrimPrefix(a, "--logo=")
+		case a == "--footer" && i+1 < len(args):
+			cfg.FooterText = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--footer="):
+			cfg.FooterText = strings.TrimPrefix(a, "--footer=")
+		case (a == "--theme" || a == "--skin") && i+1 < len(args):
+			cfg.Theme = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--theme="):
+			cfg.Theme = strings.TrimPrefix(a, "--theme=")
+		case strings.HasPrefix(a, "--skin="):
+			cfg.Theme = strings.TrimPrefix(a, "--skin=")
+		case a == "--title" && i+1 < len(args):
+			cfg.DashboardTitle = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--title="):
+			cfg.DashboardTitle = strings.TrimPrefix(a, "--title=")
 		case !strings.HasPrefix(a, "-"):
 			if port, err := strconv.Atoi(a); err == nil && port > 0 {
 				cfg.Addr = fmt.Sprintf(":%d", port)
@@ -2348,6 +2347,12 @@ func cmdHub(args []string, p *output.Printer) error {
 	p.Out(fmt.Sprintf("  • Telemetry Ingest: %s", p.Dim(displayURL+"/api/v1/runs")))
 	if cfg.DataDir != "" {
 		p.Out(fmt.Sprintf("  • Storage:          %s", p.Dim(cfg.DataDir)))
+	}
+	if cfg.Theme != "" {
+		p.Out(fmt.Sprintf("  • Default Theme:    %s", p.Cyan(cfg.Theme)))
+	}
+	if cfg.LogoURL != "" {
+		p.Out(fmt.Sprintf("  • Custom Logo:      %s", p.Dim(cfg.LogoURL)))
 	}
 	if cfg.APIKey != "" {
 		p.Out(fmt.Sprintf("  • Auth:             %s", p.Green("Bearer token enabled")))

@@ -657,8 +657,28 @@ func applyAuth(p *Prepared, auth any, envAuth any, ctx *templating.Context) erro
 			}
 		}
 
+	case "cookie":
+		cookieVal := fmt.Sprintf("%v", authMap["cookie"])
+		if cookieVal == "" || cookieVal == "<nil>" {
+			cookieVal = fmt.Sprintf("%v", authMap["value"])
+		}
+		if cookieVal != "" && cookieVal != "<nil>" {
+			p.Headers["Cookie"] = cookieVal
+		}
+
 	default:
-		return zone.NewZoneError("Unsupported auth type '%s' (bearer, basic, apikey, header, none)", kind)
+		return zone.NewZoneError("Unsupported auth type '%s' (bearer, basic, apikey, header, cookie, none)", kind)
+	}
+
+	if p.Headers["Authorization"] == "" && (auth == nil || auth == "inherit") {
+		if tok := ctx.Get("token", nil); tok != nil && fmt.Sprintf("%v", tok) != "" && fmt.Sprintf("%v", tok) != "<nil>" {
+			p.Headers["Authorization"] = "Bearer " + fmt.Sprintf("%v", tok)
+		}
+	}
+	if p.Headers["Cookie"] == "" {
+		if ck := ctx.Get("cookie", nil); ck != nil && fmt.Sprintf("%v", ck) != "" && fmt.Sprintf("%v", ck) != "<nil>" {
+			p.Headers["Cookie"] = fmt.Sprintf("%v", ck)
+		}
 	}
 
 	return nil

@@ -382,7 +382,93 @@ docker run -d \
   -p 8080:8080 \
   -v hit-hub-data:/root/.hit/hub \
   ghcr.io/markjordan/hit-endpoint:latest \
-  hub --port 8080 --api-key "${HIT_HUB_API_KEY}"
+  hub --port 8080 --api-key "${HIT_HUB_API_KEY}" --theme light --logo "https://company.com/logo.svg"
 ```
+
+---
+
+## 👥 User & Node Setup Checklist
+
+| Role | Environment | Actions & Workflow | Key Commands & Variables |
+|---|---|---|---|
+| **Solo Developer** | Local Workstation | Run local hub or connect to remote team hub; track personal test runs and latency regressions without team clutter. | `hit hub --port 8080`<br>`hit run --publish`<br>View: **"My Runs"** tab |
+| **Team Developer** | Workstation & Feature Branches | Connect zone or CLI to shared company hub; test runs are attributed to your Git author/branch and machine name automatically. | `export HIT_TELEMETRY_ENDPOINT=http://hub.internal:8080`<br>`hit run collections/ --publish` |
+| **CI / CD Pipeline** | GitHub Actions, GitLab CI, CircleCI | Ingest regression telemetry from PR builds; auto-detects pipeline provider, commit SHA, PR number, and tags node as `ci-runner`. | `export HIT_PUBLISH=true`<br>`export HIT_API_KEY="sec_..."`<br>`hit run --junit=results.xml` |
+| **Hub Webmaster / Admin** | Server, VPS, or Kubernetes | Deploy hub daemon with persistent storage, API key authentication, custom company logo, footer, and default skin. | `hit hub --port 8080 --dir /var/lib/hit-hub`<br>`--api-key "secret" --logo "https://..."`<br>`--theme light --footer "Acme Corp"` |
+
+---
+
+## 🛠️ Webmaster Guide & Hosting Options
+
+The Fleet Hub is compiled as a self-contained, zero-dependency Go binary with an embedded HTML/CSS/JS dashboard. It can be hosted flexibly depending on your team's network security posture:
+
+### Option 1: Standard Web Host / Linux VPS / Docker (Dynamic Hub)
+Deploy `hit hub` on an internal VM or container:
+```bash
+# systemd service or Docker container
+hit hub --port 8080 \
+  --dir /var/lib/hit-hub \
+  --api-key "$HUB_SECRET" \
+  --logo /etc/hit/company-logo.svg \
+  --footer "Acme Corp Platform Engineering" \
+  --theme dark
+```
+Place behind **Nginx**, **Caddy** (for automated Let's Encrypt certificates), or an **AWS Application Load Balancer**.
+
+### Option 2: Cloudflare (Cloudflare Tunnel + Zero Trust SSO)
+Keep the Hub entirely private inside a corporate VPC without public IP exposure or inbound firewall openings:
+1. Run `hit hub --port 8080` on an internal instance.
+2. Spin up a Cloudflare Tunnel:
+   ```bash
+   cloudflared tunnel run --url http://localhost:8080 my-hit-hub
+   ```
+3. Attach **Cloudflare Access** in your Zero Trust dashboard to require corporate Google Workspace, Okta, or Azure AD SAML authentication at the edge.
+
+### Option 3: AWS S3 & CloudFront (Static Historical Archive)
+For teams only needing historical run auditing without live worker orchestration:
+1. Generate static HTML and HAR reports during CI test runs:
+   ```bash
+   hit report html -o ./public/index.html -n 250
+   ```
+2. Sync reports to an Amazon S3 bucket:
+   ```bash
+   aws s3 sync ./public s3://my-company-hit-reports/ --delete
+   ```
+3. Expose via CloudFront with OAC (Origin Access Control) or Cognito authentication.
+
+### Option 4: GitHub Pages (CI Report Publishing)
+In your GitHub Actions workflow, publish the generated HTML report to GitHub Pages on every `main` branch push:
+```yaml
+- name: Generate HTML Report
+  run: hit report html -o public/index.html -n 100
+- name: Deploy to GitHub Pages
+  uses: actions/upload-pages-artifact@v3
+  with:
+    path: public
+```
+
+---
+
+## 🎨 Built-in Skins & Branding
+
+The Hub includes customizable company branding and 3 distinct UI skins:
+
+### CLI Startup Customizations
+```bash
+hit hub \
+  --port 8080 \
+  --logo "https://company.com/assets/logo.svg" \  # Or local file: --logo ./assets/logo.png
+  --footer "Proprietary & Confidential · Acme Corp" \
+  --theme light                                   # Default theme: dark, light, or night
+```
+
+### Supported Skins
+1. **🌙 Dark Mode (Default)**: Modern deep slate theme with subtle card borders, tailored for developer terminals.
+2. **☀️ Light Mode (`--theme light`)**: Clean, high-contrast white background (`#ffffff`) with dark typography—optimized for day shifts, executive demonstrations, and light-mode desktop environments.
+3. **🌑 Night Mode (`--theme night`)**: Ultra-high contrast pure OLED black (`#000000`) background with vibrant status pills—optimized for operations centers and battery savings.
+
+### Dynamic Theme Switcher
+Every visitor can toggle their personal skin preference using the dropdown in the dashboard header. The selection is preserved across browser sessions in `localStorage`.
+
 
 

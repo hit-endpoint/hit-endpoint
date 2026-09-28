@@ -1,18 +1,53 @@
 package hub
 
-// RenderDashboardHTML returns the complete, self-contained single-page dashboard HTML.
+import (
+	"html"
+	"strings"
+)
+
+// DashboardOptions configures appearance, theming, and branding of the Hub web UI.
+type DashboardOptions struct {
+	Title      string
+	LogoURL    string
+	FooterText string
+	Theme      string // "dark", "light", "night"
+}
+
+// RenderDashboardHTML maintains backward compatibility.
 func RenderDashboardHTML(title string) string {
+	return RenderDashboard(DashboardOptions{Title: title})
+}
+
+// RenderDashboard returns the complete, self-contained single-page dashboard HTML with custom branding and skins.
+func RenderDashboard(opts DashboardOptions) string {
+	title := opts.Title
 	if title == "" {
 		title = "Hit Cloud Fleet Hub"
 	}
+
+	defaultTheme := strings.ToLower(opts.Theme)
+	if defaultTheme != "light" && defaultTheme != "night" {
+		defaultTheme = "dark"
+	}
+
+	logoHTML := `<div class="brand-logo">HIT</div>`
+	if opts.LogoURL != "" {
+		logoHTML = `<img src="` + html.EscapeString(opts.LogoURL) + `" alt="Logo" class="brand-custom-logo" style="max-height:36px; max-width:140px; object-fit:contain; border-radius:6px;" />`
+	}
+
+	footerContent := `Hit Cloud Fleet Hub · Git-native API testing &amp; load fleet management · <a href="https://github.com/hit-endpoint/hit-endpoint" target="_blank" style="color:var(--accent); text-decoration:none;">Documentation</a>`
+	if opts.FooterText != "" {
+		footerContent = opts.FooterText
+	}
+
 	return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="` + defaultTheme + `">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>` + title + `</title>
+<title>` + html.EscapeString(title) + `</title>
 <style>
-  :root {
+  :root, [data-theme="dark"] {
     --bg-primary: #0b0f19;
     --bg-secondary: #111827;
     --bg-card: #1f2937;
@@ -30,7 +65,48 @@ func RenderDashboardHTML(title string) string {
     --warning: #f59e0b;
     --warning-bg: rgba(245, 158, 11, 0.15);
     --info-bg: rgba(56, 189, 248, 0.15);
+    --table-row-hover: rgba(255, 255, 255, 0.02);
     --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  }
+  [data-theme="light"] {
+    --bg-primary: #f8fafc;
+    --bg-secondary: #ffffff;
+    --bg-card: #ffffff;
+    --bg-card-hover: #f1f5f9;
+    --border-color: #e2e8f0;
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --text-muted: #64748b;
+    --accent: #0284c7;
+    --accent-hover: #0369a1;
+    --success: #16a34a;
+    --success-bg: rgba(22, 163, 74, 0.12);
+    --danger: #dc2626;
+    --danger-bg: rgba(220, 38, 38, 0.12);
+    --warning: #d97706;
+    --warning-bg: rgba(217, 119, 6, 0.12);
+    --info-bg: rgba(2, 132, 199, 0.12);
+    --table-row-hover: rgba(0, 0, 0, 0.03);
+  }
+  [data-theme="night"] {
+    --bg-primary: #000000;
+    --bg-secondary: #0a0a0a;
+    --bg-card: #121212;
+    --bg-card-hover: #1c1c1c;
+    --border-color: #27272a;
+    --text-primary: #ffffff;
+    --text-secondary: #a1a1aa;
+    --text-muted: #71717a;
+    --accent: #38bdf8;
+    --accent-hover: #0ea5e9;
+    --success: #22c55e;
+    --success-bg: rgba(34, 197, 94, 0.2);
+    --danger: #ef4444;
+    --danger-bg: rgba(239, 68, 68, 0.2);
+    --warning: #f59e0b;
+    --warning-bg: rgba(245, 158, 11, 0.2);
+    --info-bg: rgba(56, 189, 248, 0.2);
+    --table-row-hover: rgba(255, 255, 255, 0.04);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -243,7 +319,30 @@ func RenderDashboardHTML(title string) string {
     border-bottom: 1px solid var(--border-color);
   }
   tr:hover td {
-    background: rgba(255, 255, 255, 0.02);
+    background: var(--table-row-hover, rgba(255, 255, 255, 0.02));
+  }
+  .hub-footer {
+    border-top: 1px solid var(--border-color);
+    padding: 1.75rem 2rem;
+    margin-top: 3rem;
+    background: var(--bg-secondary);
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    text-align: center;
+  }
+  .theme-select {
+    background: var(--bg-card);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    padding: 0.45rem 0.75rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    outline: none;
+  }
+  .theme-select:focus {
+    border-color: var(--accent);
   }
   .badge {
     display: inline-block;
@@ -436,13 +535,18 @@ func RenderDashboardHTML(title string) string {
 
 <header>
   <div class="brand">
-    <div class="brand-logo">HIT</div>
+    ` + logoHTML + `
     <div>
-      <div class="brand-title">Hit Cloud Fleet Hub</div>
+      <div class="brand-title">` + html.EscapeString(title) + `</div>
     </div>
     <div class="badge-live"><div class="pulse-dot"></div> CONNECTED</div>
   </div>
   <div class="header-actions">
+    <select id="theme-select" class="theme-select" onchange="setTheme(this.value)" title="Switch theme skin">
+      <option value="dark">🌙 Dark</option>
+      <option value="light">☀️ Light</option>
+      <option value="night">🌑 Night (OLED)</option>
+    </select>
     <button class="btn" style="background:#0284c7; color:#fff; border-color:#38bdf8; font-weight:600;" onclick="openDispatchModal()">⚡ Dispatch Run</button>
     <button class="btn" onclick="loadAllData()">↻ Refresh</button>
   </div>
@@ -1314,9 +1418,36 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
+var defaultTheme = '` + defaultTheme + `';
+
+function setTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  try {
+    localStorage.setItem('hit_hub_theme', theme);
+  } catch(e) {}
+  var sel = document.getElementById('theme-select');
+  if (sel) sel.value = theme;
+}
+
+(function() {
+  var savedTheme = null;
+  try {
+    savedTheme = localStorage.getItem('hit_hub_theme');
+  } catch(e) {}
+  var active = savedTheme || defaultTheme || 'dark';
+  setTheme(active);
+})();
+
 loadAllData();
 setInterval(loadAllData, 10000);
 </script>
+
+<footer class="hub-footer">
+  <div class="container footer-content">
+    ` + footerContent + `
+  </div>
+</footer>
+
 </body>
 </html>`
 }

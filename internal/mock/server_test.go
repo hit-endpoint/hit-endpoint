@@ -15,20 +15,29 @@ func TestMockServerEndpoints(t *testing.T) {
 
 	// 1. Health
 	res, err := http.Get(ts.URL + "/health")
-	if err != nil || res.StatusCode != 200 {
-		t.Fatalf("health check failed: status=%v, err=%v", res.StatusCode, err)
+	if err != nil {
+		t.Fatalf("health check request failed: %v", err)
+	}
+	if res.StatusCode != 200 {
+		t.Fatalf("health check failed: status=%v", res.StatusCode)
 	}
 
 	// 2. Unauthed pets
 	res, err = http.Get(ts.URL + "/pets")
-	if err != nil || res.StatusCode != 401 {
+	if err != nil {
+		t.Fatalf("unauthed pets request failed: %v", err)
+	}
+	if res.StatusCode != 401 {
 		t.Fatalf("expected 401 unauthed, got %v", res.StatusCode)
 	}
 
 	// 3. Login
 	loginBody := bytes.NewBufferString(`{"username":"admin","password":"hunter2"}`)
 	res, err = http.Post(ts.URL+"/auth/login", "application/json", loginBody)
-	if err != nil || res.StatusCode != 200 {
+	if err != nil {
+		t.Fatalf("login request failed: %v", err)
+	}
+	if res.StatusCode != 200 {
 		t.Fatalf("login failed: %v", res.StatusCode)
 	}
 	var loginResp map[string]any
@@ -43,7 +52,10 @@ func TestMockServerEndpoints(t *testing.T) {
 	req, _ := http.NewRequest("GET", ts.URL+"/pets", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	res, err = client.Do(req)
-	if err != nil || res.StatusCode != 200 {
+	if err != nil {
+		t.Fatalf("authed get /pets request failed: %v", err)
+	}
+	if res.StatusCode != 200 {
 		t.Fatalf("authed get /pets failed: %v", res.StatusCode)
 	}
 	var listResp struct {
@@ -61,7 +73,10 @@ func TestMockServerEndpoints(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	res, err = client.Do(req)
-	if err != nil || res.StatusCode != 201 {
+	if err != nil {
+		t.Fatalf("create pet request failed: %v", err)
+	}
+	if res.StatusCode != 201 {
 		t.Fatalf("create pet failed: %v", res.StatusCode)
 	}
 	var created Pet
@@ -74,7 +89,10 @@ func TestMockServerEndpoints(t *testing.T) {
 	req, _ = http.NewRequest("GET", ts.URL+"/pets/3", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	res, err = client.Do(req)
-	if err != nil || res.StatusCode != 200 {
+	if err != nil {
+		t.Fatalf("get pet 3 request failed: %v", err)
+	}
+	if res.StatusCode != 200 {
 		t.Fatalf("get pet 3 failed: %v", res.StatusCode)
 	}
 
@@ -82,7 +100,10 @@ func TestMockServerEndpoints(t *testing.T) {
 	req, _ = http.NewRequest("DELETE", ts.URL+"/pets/3", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	res, err = client.Do(req)
-	if err != nil || res.StatusCode != 204 {
+	if err != nil {
+		t.Fatalf("delete pet 3 request failed: %v", err)
+	}
+	if res.StatusCode != 204 {
 		t.Fatalf("delete pet 3 failed: %v", res.StatusCode)
 	}
 
@@ -90,7 +111,10 @@ func TestMockServerEndpoints(t *testing.T) {
 	req, _ = http.NewRequest("GET", ts.URL+"/pets/3", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	res, err = client.Do(req)
-	if err != nil || res.StatusCode != 404 {
+	if err != nil {
+		t.Fatalf("get deleted pet request failed: %v", err)
+	}
+	if res.StatusCode != 404 {
 		t.Fatalf("expected 404 for deleted pet, got %v", res.StatusCode)
 	}
 }

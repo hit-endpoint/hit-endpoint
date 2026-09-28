@@ -16,6 +16,10 @@ A fast, compiled Go CLI delivering **23 production-ready testing features** in a
 
 ## 🚀 Quick Start
 
+### Overview
+* **A. Basic Install**: Run the [One-Liner Quick Install](#one-liner-quick-install-macos--linux) (macOS & Linux) or read the [Detailed Installation Guide (INSTALL.md)](INSTALL.md).
+* **B. Using Zones or using it in a Project**: Run the command `hit init` in your project's directory (see [Step 4: Create an API Zone](#4-create-an-api-zone-hit-init)).
+
 ### 1. Install
 
 #### One-Liner Quick Install (macOS & Linux)
@@ -160,6 +164,8 @@ For in-depth guides on every feature, explore the [**Documentation Library**](do
 | Command | Purpose |
 |---|---|
 | `hit [METHOD] URL` | Ad hoc request; prints status line, headers, and body |
+| `hit help [command]` | Detailed help reference, flags, options, and copy-pasteable examples for any command |
+| `hit auth [token\|cookie]` | Imports JWT tokens, browser session cookies, or interactive paste with claim inspection |
 | `hit body [METHOD] URL` | Prints response body only |
 | `hit code [METHOD] URL` | Prints HTTP status code only |
 | `hit time [METHOD] URL [--ms]` | Prints response duration (`45ms` or raw `45.2`) |
@@ -209,6 +215,74 @@ For full syntax specifications, see the [**Single Source of Truth Reference**](r
 * **Distributed Cloud Load Testing**: Multi-worker performance testing with automated Hub worker auto-discovery and statistical percentiles (`hit perf --hub`).
 
 👉 For complete architectural guides, REST API specs, and dashboard walkthroughs, see the [**Enterprise CI/CD, Governance & Monitoring Guide**](docs/enterprise.md) and [**Cloud Fleet Hub Guide**](docs/telemetry-and-cloud.md).
+
+---
+
+## 🔐 Vault & Secrets Management
+
+API tests inevitably interact with sensitive credentials—OAuth2 tokens, basic auth passwords, and internal API keys. `hit` is designed with zero-leakage security principles to keep secrets safe in version control and across terminal screens:
+
+### Currently Supported Capabilities
+* **Local Git-Safe Secrets (`servers/<server>.secrets.yaml`)**: Store local developer credentials uncommitted. Values automatically overlay onto the active server definition and are automatically added to `.gitignore`.
+* **Dynamic Host Environment Variables (`{{$env:VAR}}`)**: Resolve credentials at execution time from host environment variables without saving plaintext values to disk.
+* **Client-Side Zero-Leakage Masking**: All secrets defined in secrets files and auth mappings are strictly masked (`[MASKED]`) across terminal standard output, verbose debug logs (`-v`), `.hit/history.jsonl` files, HAR 1.2 recordings, and Team Hub telemetry transmissions.
+* **Pre-Commit Governance & Secret Hygiene (`hit policy`)**: Built-in linting with `disallow_hardcoded_secrets: true` scans test definitions for raw bearer tokens, private keys, or un-gitignored credential files before they reach Git.
+* **Session Cookie & JWT Importer (`hit auth`)**: Import live tokens or browser cookies with interactive paste (`hit auth`), CLI flags, or shell pipes (`pbpaste | hit auth`). Decodes JWT claims (subject, email, roles, expiration TTL) and auto-injects `Authorization` or `Cookie` headers into requests and `{{token}}` / `{{cookie}}` templates.
+
+### Roadmap Extensions (In Development)
+* **Direct Enterprise Vault Backends**: Native remote fetch plugins for **HashiCorp Vault** (AppRole / Token engine), **AWS Secrets Manager**, **Google Cloud Secret Manager**, and **Azure Key Vault**.
+* **Hardware Security Modules (HSM) & Client Certificates**: Support for PKCS#11 hardware tokens, YubiKey FIDO2 assertions, and mutual TLS (mTLS) client certificate stores.
+* **Dynamic OAuth2 & STS Token Exchange**: Automatic pre-flight token refresh, rotating client credentials, and AWS STS AssumeRole token retrieval prior to test suite execution.
+
+> 💼 **Custom Enterprise Integrations**: Need custom integrations with your organization's internal Vault, KMS, or OAuth2 / SAML SSO identity provider? Contact us at: `305618344+mrmockdock@users.noreply.github.com`.
+
+---
+
+## 🌐 Team Fleet Hub & Webmaster Guide
+
+The **Hit Cloud Fleet Hub** (`hit hub`) provides a centralized control plane for engineering teams: aggregate test run telemetry across developer laptops and CI pipelines, inspect visual regional topology of load workers, and remotely dispatch jobs with real-time log streaming.
+
+### User & Node Setup Checklist
+
+| Role | Environment | Actions & Workflow | Key Commands & Variables |
+|---|---|---|---|
+| **Solo Developer** | Local Workstation | Run local hub or connect to remote team hub; track personal test runs and latency regressions without team clutter. | `hit hub --port 8080`<br>`hit run --publish`<br>View: **"My Runs"** tab |
+| **Team Developer** | Workstation & Feature Branches | Connect zone or CLI to shared company hub; test runs are attributed to your Git author/branch and machine name automatically. | `export HIT_TELEMETRY_ENDPOINT=http://hub.internal:8080`<br>`hit run collections/ --publish` |
+| **CI / CD Pipeline** | GitHub Actions, GitLab CI, CircleCI | Ingest regression telemetry from PR builds; auto-detects pipeline provider, commit SHA, PR number, and tags node as `ci-runner`. | `export HIT_PUBLISH=true`<br>`export HIT_API_KEY="sec_..."`<br>`hit run --junit=results.xml` |
+| **Hub Webmaster / Admin** | Server, VPS, or Kubernetes | Deploy hub daemon with persistent storage, API key authentication, custom company logo, footer, and default skin. | `hit hub --port 8080 --dir /var/lib/hit-hub`<br>`--api-key "secret" --logo "https://..."`<br>`--theme light --footer "Acme Corp"` |
+
+### Hosting Options
+
+`hit hub` is a single zero-dependency static Go binary, making deployment flexible across any infrastructure:
+
+1. **Standard Web Host / Linux VPS / Docker (Recommended for Live Hub)**:
+   * Run directly as a `systemd` service or Docker container:
+     ```bash
+     hit hub --port 8080 --dir /data/hit-hub --api-key "$HUB_SECRET" --logo /data/logo.svg --footer "Acme Corp Platform"
+     ```
+   * Place behind **Nginx**, **Caddy** (with automatic Let's Encrypt TLS), or an **AWS ALB** reverse proxy on port 443.
+2. **Cloudflare (Cloudflare Tunnel & Access SSO)**:
+   * Keep your hub private inside your corporate VPC without exposing public ports.
+   * Run Cloudflare Tunnel (`cloudflared tunnel run`) pointing to `http://localhost:8080`.
+   * Enforce corporate Google / Okta / SAML SSO authentication at the edge using **Cloudflare Access Zero Trust**.
+3. **AWS S3 & CloudFront (Static Historical Archive)**:
+   * Export static HTML and HAR reports from CI runs:
+     ```bash
+     hit report html -o ./public/index.html -n 100
+     aws s3 sync ./public s3://company-hit-reports/ --delete
+     ```
+   * Serve globally with low latency via CloudFront CDN.
+4. **GitHub Pages (Automated CI Reports)**:
+   * In your `.github/workflows/api-tests.yml`, generate the HTML report and deploy to `gh-pages` branch using `actions/upload-pages-artifact`.
+
+### Built-in Skins & Theming
+
+The Hub includes 3 built-in color skins designed for distinct viewing conditions:
+* **🌙 Dark Mode (Default)**: Modern slate dark theme engineered for developer IDE and terminal workflows.
+* **☀️ Light Mode (`--theme light`)**: Clean, high-contrast white background (`#ffffff`) with slate typography—ideal for daytime work, documentation embeds, and presentations.
+* **🌑 Night Mode (`--theme night`)**: Ultra-high contrast pure black (`#000000`) background with vibrant neon accents—optimized for OLED displays and low-light operations centers.
+
+**Live Theme Switching**: Users can toggle between skins anytime using the theme selector dropdown in the top-right header; user preferences are saved automatically in browser `localStorage`.
 
 ---
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +22,9 @@ type Config struct {
 	ProjectID      string
 	PublicURL      string
 	DashboardTitle string
+	LogoURL        string
+	FooterText     string
+	Theme          string // "dark", "light", "night"
 }
 
 // Server implements the cloud-hosted / self-hosted fleet telemetry aggregator.
@@ -57,6 +61,15 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 
 	mux := http.NewServeMux()
+	if cfg.LogoURL != "" && !strings.HasPrefix(cfg.LogoURL, "http://") && !strings.HasPrefix(cfg.LogoURL, "https://") && !strings.HasPrefix(cfg.LogoURL, "data:") {
+		if fi, err := os.Stat(cfg.LogoURL); err == nil && !fi.IsDir() {
+			logoPath := cfg.LogoURL
+			mux.HandleFunc("/logo", func(w http.ResponseWriter, r *http.Request) {
+				http.ServeFile(w, r, logoPath)
+			})
+			s.cfg.LogoURL = "/logo"
+		}
+	}
 	mux.HandleFunc("/api/v1/runs", s.handleRunsRoute)
 	mux.HandleFunc("/v1/runs", s.handleRunsRoute) // compatibility route
 	mux.HandleFunc("/api/v1/runs/", s.handleGetRun)
@@ -278,7 +291,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
-	html := RenderDashboardHTML(s.cfg.DashboardTitle)
+	html := RenderDashboard(DashboardOptions{
+		Title:      s.cfg.DashboardTitle,
+		LogoURL:    s.cfg.LogoURL,
+		FooterText: s.cfg.FooterText,
+		Theme:      s.cfg.Theme,
+	})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(html))

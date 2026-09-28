@@ -152,6 +152,22 @@ vars:
   admin_pass: "{{$env:ADMIN_PASSWORD:fallback_pass}}"  # Supports fallback defaults
 ```
 
+#### Option C: Session Cookie & JWT Importer (`hit auth`)
+Paste tokens or cookies directly from browser devtools or shell clipboards into `hit`:
+
+```bash
+# 1. Interactive paste prompt or pipeline
+hit auth                                  # Prompts for JWT, Cookie, or Bearer token
+pbpaste | hit auth                        # macOS clipboard pipe
+
+# 2. Explicit setters
+hit auth token "eyJhbGciOi..."            # Automatically decodes claims and expiry TTL
+hit auth cookie "session_id=abc; uid=10"  # Sets session cookies
+
+# 3. Inspect active credentials
+hit auth show
+```
+
 #### Ephemeral Token Capture
 Tokens that expire (e.g. OAuth 2.0 access tokens) should be captured dynamically rather than copy-pasted:
 
@@ -171,6 +187,22 @@ captures:
 ```
 
 When you execute `hit run auth/login`, the token is stored locally in `.hit/state/<server>.json` and automatically attached to all subsequent calls.
+
+### Enterprise Vault Capabilities & Roadmap
+
+| Category | Capability | Status |
+|---|---|---|
+| **Local File Secrets** | `servers/<server>.secrets.yaml` (gitignored, auto-masked) | ✅ Fully Supported |
+| **Environment Variables** | `{{$env:NAME}}` runtime variable resolution | ✅ Fully Supported |
+| **Output Redaction** | `[MASKED]` across CLI, verbose logs, HAR 1.2, and reports | ✅ Fully Supported |
+| **Governance Linting** | `hit policy` blocking raw tokens & un-gitignored keys | ✅ Fully Supported |
+| **JWT / Cookie Import** | `hit auth` importer with claim inspection and auto-inject | ✅ Fully Supported |
+| **Remote Vaults** | HashiCorp Vault (AppRole / token lookup) | ⏳ In Development |
+| **Cloud Secret Managers** | AWS Secrets Manager, GCP Secret Manager, Azure Key Vault | ⏳ In Development |
+| **Hardware Tokens / KMS** | PKCS#11 hardware keys, YubiKey, AWS KMS asymmetric signing | ⏳ In Development |
+| **Dynamic Token Refresh** | Pre-flight OAuth2 / STS AssumeRole auto-refresh | ⏳ In Development |
+
+> 💼 **Custom Enterprise Integrations**: Need custom integrations with your organization's internal Vault, KMS, or OAuth2 / SAML SSO identity provider? Contact us at: `305618344+mrmockdock@users.noreply.github.com`.
 
 ---
 
