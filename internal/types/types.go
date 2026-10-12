@@ -8,6 +8,15 @@ import (
 	"github.com/hit-endpoint/hit-endpoint/internal/assertions"
 )
 
+type RequestTimings struct {
+	DNS     float64 `json:"dns_ms"`
+	Connect float64 `json:"connect_ms"`
+	SSL     float64 `json:"ssl_ms"`
+	Send    float64 `json:"send_ms"`
+	Wait    float64 `json:"wait_ms"`
+	Receive float64 `json:"receive_ms"`
+}
+
 type Result struct {
 	Name           string                  `json:"name"`
 	Ref            string                  `json:"ref"`
@@ -22,6 +31,7 @@ type Result struct {
 	Text           string                  `json:"text"`
 	JSON           any                     `json:"json"`
 	ElapsedMs      float64                 `json:"elapsed_ms"`
+	Timings        *RequestTimings         `json:"timings,omitempty"`
 	Size           int64                   `json:"size"`
 	Tests          []assertions.TestResult `json:"tests"`
 	Captures       map[string]any          `json:"captures"`

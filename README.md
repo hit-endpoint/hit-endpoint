@@ -98,7 +98,7 @@ my-api/
 
 ## 📄 Declarative YAML Requests
 
-Save your request definitions as `.yaml` files inside `collections/<collection-name>/` (e.g. `collections/users/get-user.yaml`). Numeric prefixes (e.g. `01-`, `02-`) dictate execution order when running an entire collection.
+Save your request definitions as `.yaml` files inside `collections/<collection-name>/` (e.g. `collections/users/get-user.yaml`). Numeric prefixes (e.g. `01-`, `02-`) dictate execution order when running an entire collection. Both concise (`path:`, `assert:`) and full (`url:`, `tests:`) syntax are supported:
 
 ```yaml
 # collections/users/get-user.yaml
@@ -152,7 +152,7 @@ hit run users
 | [**Governance & Policy**](docs/governance-and-policies.md) | `hit policy`, `--enforce-policy` | Pre-commit and CI gate enforcing contract checks, SLA ceilings, and secret hygiene. |
 | [**Remote Dispatch & Live Console**](docs/telemetry-and-cloud.md#live-interactive-dispatch--fleet-job-orchestration) | `hit dispatch` | Interactive UI run triggers, real-time log/assertion streaming, and remote node targeting. |
 | [**Telemetry & Fleet Hub**](docs/telemetry-and-cloud.md) | `hit run --publish`, `hit hub` | Centralized dashboard, developer vs. CI node attribution, and regional fleet topology. |
-| [**Synthetic Monitoring**](docs/synthetic-monitoring.md) | `hit probe run`, `hit probe daemon` | Multi-region consensus monitoring with Hub enrollment, PagerDuty, and Slack alerts. |
+| [**Synthetic Monitoring**](docs/synthetic-monitoring.md) | `hit probe run`, `hit probe daemon` | Multi-region consensus monitoring with Hub enrollment, PagerDuty, Slack, Opsgenie, and custom Webhook alerts. |
 | [**AI / MCP Server**](docs/ai-agent-and-mcp.md) | `hit mcp` | Native Model Context Protocol support for Cursor, Claude, and Windsurf. |
 | [**Interactive Learning Sandbox**](learn/README.md) | `hit learn`, `hit learn verify` | Hands-on offline interactive training curriculum and automated grading engine. |
 
@@ -196,7 +196,7 @@ For in-depth guides on every feature, explore the [**Documentation Library**](do
 | `hit hub [--port P] [--dir D] [--api-key K]` | Starts fleet control plane hub and web UI with visual regional topology |
 | `hit probe run <FILE\|REF>` | Multi-region consensus probe check across simulated or edge regions |
 | `hit probe daemon <FILE> [--hub U]` | Continuous synthetic API monitoring daemon with Hub enrollment & incident alerting |
-| `hit probe test-alert <FILE>` | Validates PagerDuty, Slack Block Kit, and Opsgenie notifications |
+| `hit probe test-alert <FILE>` | Validates PagerDuty, Slack Block Kit, Opsgenie, and custom Webhook notifications |
 | `hit mcp` | Starts stdio Model Context Protocol server for AI tools |
 | `hit learn [verify]` | Hands-on offline interactive training curriculum & automated verification grader |
 

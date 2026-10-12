@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -57,12 +58,32 @@ import (
 //go:embed reference.md
 var referenceDoc string
 
+var Version = "0.1.0"
+
 const (
-	Version   = "0.1.0"
 	ExitOK    = 0
 	ExitFail  = 1
 	ExitUsage = 2
 )
+
+type exitError struct {
+	code int
+	err  error
+}
+
+func (e *exitError) Error() string {
+	if e.err != nil {
+		return e.err.Error()
+	}
+	return ""
+}
+
+func failExit(format string, args ...any) error {
+	return &exitError{
+		code: ExitFail,
+		err:  fmt.Errorf(format, args...),
+	}
+}
 
 type GlobalFlags struct {
 	Zone   string
@@ -251,6 +272,13 @@ func run(args []string) int {
 
 	err := dispatch(cmd, cmdArgs, &globals, printer)
 	if err != nil {
+		var exitErr *exitError
+		if errors.As(err, &exitErr) {
+			if exitErr.err != nil && exitErr.err.Error() != "" {
+				fmt.Fprintln(os.Stderr, printer.Red(fmt.Sprintf("error: %v", exitErr.err)))
+			}
+			return exitErr.code
+		}
 		fmt.Fprintln(os.Stderr, printer.Red(fmt.Sprintf("error: %v", err)))
 		return ExitUsage
 	}
@@ -3276,28 +3304,48 @@ func cmdCost(args []string, globals *GlobalFlags, p *output.Printer) error {
 		}
 	}
 	if retriesStr != "" {
-		retries, _ := strconv.Atoi(retriesStr)
+		retries, err := strconv.Atoi(retriesStr)
+		if err != nil || retries < 0 {
+			return zone.NewZoneError("invalid retries %q: must be >= 0", retriesStr)
+		}
 		cfg.Retry.MaxAttempts = retries
 	}
 	if failRateStr != "" {
 		val := strings.TrimSuffix(failRateStr, "%")
 		rate, err := strconv.ParseFloat(val, 64)
-		if err == nil {
-			if strings.HasSuffix(failRateStr, "%") || rate > 1.0 {
-				rate = rate / 100.0
-			}
-			cfg.Retry.ExpectedFailureRate = rate
+		if err != nil {
+			return zone.NewZoneError("invalid failure rate %q: %v", failRateStr, err)
 		}
+		if strings.HasSuffix(failRateStr, "%") || rate > 1.0 {
+			rate = rate / 100.0
+		}
+		if rate < 0 || rate > 1.0 {
+			return zone.NewZoneError("invalid failure rate %q: must be between 0%% and 100%%", failRateStr)
+		}
+		cfg.Retry.ExpectedFailureRate = rate
 	}
 	if worstRateStr != "" {
 		val := strings.TrimSuffix(worstRateStr, "%")
 		rate, err := strconv.ParseFloat(val, 64)
-		if err == nil {
-			if strings.HasSuffix(worstRateStr, "%") || rate > 1.0 {
-				rate = rate / 100.0
-			}
-			cfg.Retry.WorstCaseFailureRate = rate
+		if err != nil {
+			return zone.NewZoneError("invalid worst-case failure rate %q: %v", worstRateStr, err)
 		}
+		if strings.HasSuffix(worstRateStr, "%") || rate > 1.0 {
+			rate = rate / 100.0
+		}
+		if rate < 0 || rate > 1.0 {
+			return zone.NewZoneError("invalid worst-case failure rate %q: must be between 0%% and 100%%", worstRateStr)
+		}
+		cfg.Retry.WorstCaseFailureRate = rate
+	}
+	if cfg.Retry.MaxAttempts < 0 {
+		return zone.NewZoneError("invalid retries %d: must be >= 0", cfg.Retry.MaxAttempts)
+	}
+	if cfg.Retry.ExpectedFailureRate < 0 || cfg.Retry.ExpectedFailureRate > 1.0 {
+		return zone.NewZoneError("invalid failure rate %.2f: must be between 0 and 1.0", cfg.Retry.ExpectedFailureRate)
+	}
+	if cfg.Retry.WorstCaseFailureRate < 0 || cfg.Retry.WorstCaseFailureRate > 1.0 {
+		return zone.NewZoneError("invalid worst-case failure rate %.2f: must be between 0 and 1.0", cfg.Retry.WorstCaseFailureRate)
 	}
 	if noBillableFails {
 		cfg.Retry.BillableFailures = false
@@ -3340,6 +3388,9 @@ func cmdCost(args []string, globals *GlobalFlags, p *output.Printer) error {
 		if err != nil {
 			return fmt.Errorf("invalid calls count %q: %w", callsStr, err)
 		}
+		if parsedCalls <= 0 {
+			return zone.NewZoneError("invalid calls count %q: must be > 0", callsStr)
+		}
 		calls = parsedCalls
 	}
 
@@ -3347,8 +3398,8 @@ func cmdCost(args []string, globals *GlobalFlags, p *output.Printer) error {
 	var budget *float64
 	if budgetStr != "" {
 		bVal, err := strconv.ParseFloat(strings.TrimPrefix(budgetStr, "$"), 64)
-		if err != nil {
-			return fmt.Errorf("invalid budget value %q: %w", budgetStr, err)
+		if err != nil || bVal < 0 {
+			return fmt.Errorf("invalid budget value %q: must be a non-negative number", budgetStr)
 		}
 		budget = &bVal
 	}
@@ -3406,7 +3457,7 @@ func cmdCost(args []string, globals *GlobalFlags, p *output.Printer) error {
 	}
 
 	if budget != nil && res.BudgetExceeded {
-		return fmt.Errorf("budget exceeded: expected cost %s exceeds budget ceiling %s",
+		return failExit("budget exceeded: expected cost %s exceeds budget ceiling %s",
 			res.FormatMoney(res.Expected.Breakdown.TotalCost),
 			res.FormatMoney(*budget),
 		)
@@ -4933,7 +4984,9 @@ Flags:
 	)
 
 	isHistoryIndex := false
-	if idx, err := strconv.Atoi(target); err == nil && idx > 0 {
+	if idx, err := strconv.Atoi(target); err == nil && idx >= 0 {
+		isHistoryIndex = true
+	} else if strings.EqualFold(target, "latest") || strings.HasPrefix(target, "hit_") {
 		isHistoryIndex = true
 	}
 
@@ -5508,7 +5561,7 @@ func cmdFuzz(args []string, globals *GlobalFlags, p *output.Printer) error {
 	}
 
 	if failOn5xx && res.ServerErrors5xx > 0 {
-		return zone.NewZoneError("fuzzing failed: detected %d server 5xx crash(es)", res.ServerErrors5xx)
+		return failExit("fuzzing failed: detected %d server 5xx crash(es)", res.ServerErrors5xx)
 	}
 
 	return nil
@@ -5946,7 +5999,7 @@ func cmdGraphQL(args []string, globals *GlobalFlags, p *output.Printer) error {
 	}
 
 	if failOnErrors && len(res.Errors) > 0 {
-		return fmt.Errorf("graphql execution returned %d error(s)", len(res.Errors))
+		return failExit("graphql execution returned %d error(s)", len(res.Errors))
 	}
 	return nil
 }
@@ -6117,6 +6170,9 @@ func cmdSSE(args []string, globals *GlobalFlags, p *output.Printer) error {
 	p.Out(fmt.Sprintf("  Avg Event Latency:   %.1f ms", float64(res.AvgDelta.Microseconds())/1000.0))
 	p.Out(fmt.Sprintf("  Total Duration:      %.2f s", res.TotalDuration.Seconds()))
 	p.Out(fmt.Sprintf("  Total Bytes:         %s", output.HumanSize(res.TotalBytes)))
+	if res.CloseReason != "" {
+		p.Out(fmt.Sprintf("  Close Reason:        %s", p.Dim(res.CloseReason)))
+	}
 
 	return nil
 }
@@ -6222,7 +6278,7 @@ func cmdWS(args []string, globals *GlobalFlags, p *output.Printer) error {
 			p.Out(fmt.Sprintf("  Expectation (%q): %s", expect, p.Green("✓ PASS")))
 		} else {
 			p.Out(fmt.Sprintf("  Expectation (%q): %s", expect, p.Red("✗ FAIL (not matched)")))
-			return fmt.Errorf("websocket expectation failed: %q was not received", expect)
+			return failExit("websocket expectation failed: %q was not received", expect)
 		}
 	}
 
@@ -6449,7 +6505,7 @@ func cmdSchedule(args []string, globals *GlobalFlags, p *output.Printer) error {
 			statusBadge = p.Red("✘ FAIL")
 		}
 
-		timeStr := tick.Timestamp.Format("15:04:05")
+		timeStr := tick.Timestamp.Format("15:04:05.000")
 		tickCountStr := fmt.Sprintf("[%d]", tick.Index)
 		if count > 0 {
 			tickCountStr = fmt.Sprintf("[%d/%d]", tick.Index, count)
@@ -6473,7 +6529,7 @@ func cmdSchedule(args []string, globals *GlobalFlags, p *output.Printer) error {
 		b, _ := json.MarshalIndent(summary, "", "  ")
 		p.Out(string(b))
 		if summary.FailedRuns > 0 {
-			return fmt.Errorf("%d of %d scheduled runs failed expectation", summary.FailedRuns, summary.TotalRuns)
+			return failExit("%d of %d scheduled runs failed expectation", summary.FailedRuns, summary.TotalRuns)
 		}
 		return nil
 	}
@@ -6495,7 +6551,7 @@ func cmdSchedule(args []string, globals *GlobalFlags, p *output.Printer) error {
 	}
 
 	if summary.FailedRuns > 0 {
-		return fmt.Errorf("%d of %d scheduled runs failed expectation", summary.FailedRuns, summary.TotalRuns)
+		return failExit("%d of %d scheduled runs failed expectation", summary.FailedRuns, summary.TotalRuns)
 	}
 	return nil
 }
@@ -6663,7 +6719,7 @@ func cmdProbeRun(args []string, globals *GlobalFlags, p *output.Printer) error {
 		b, _ := json.MarshalIndent(result, "", "  ")
 		p.Out(string(b))
 		if result.Status == probe.StatusIncident {
-			return fmt.Errorf("probe check failed consensus: %s", result.Summary)
+			return failExit("probe check failed consensus: %s", result.Summary)
 		}
 		return nil
 	}
@@ -6710,7 +6766,7 @@ func cmdProbeRun(args []string, globals *GlobalFlags, p *output.Printer) error {
 	}
 
 	if result.Status == probe.StatusIncident {
-		return fmt.Errorf("synthetic probe failed: %s", result.Summary)
+		return failExit("synthetic probe failed: %s", result.Summary)
 	}
 	return nil
 }
@@ -7329,6 +7385,16 @@ func cmdShorthand(args []string, globals *GlobalFlags, p *output.Printer) error 
 			target = pos[1]
 		} else {
 			return zone.NewZoneError("usage: hit shorthand set <NAME> <URL|REF> [-m METHOD] [-s SERVER] [-H k:v] [--global]")
+		}
+
+		if isKnownSubcommand(name) || isHTTPMethod(name) {
+			return zone.NewZoneError("shorthand name %q collides with a built-in command or HTTP method", name)
+		}
+		if !isGlobal && zoneRoot != "" {
+			collDir := filepath.Join(zoneRoot, "collections", name)
+			if fi, err := os.Stat(collDir); err == nil && fi.IsDir() {
+				fmt.Fprintf(os.Stderr, "%s\n", p.Yellow(fmt.Sprintf("warning: shorthand %q shadows existing collection folder collections/%s", name, name)))
+			}
 		}
 
 		headersMap := make(map[string]string)

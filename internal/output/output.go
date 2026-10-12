@@ -371,6 +371,13 @@ func Histogram(values []float64, bins int, width int) []string {
 		}
 	}
 
+	labelFmt := "%8.1f ms  %-*s %d"
+	if step < 0.01 {
+		labelFmt = "%8.3f ms  %-*s %d"
+	} else if step < 0.1 {
+		labelFmt = "%8.2f ms  %-*s %d"
+	}
+
 	var lines []string
 	for i, c := range counts {
 		barLen := 0
@@ -379,7 +386,7 @@ func Histogram(values []float64, bins int, width int) []string {
 		}
 		bar := strings.Repeat("█", barLen)
 		valAt := lo + float64(i)*step
-		lines = append(lines, fmt.Sprintf("%8.1f ms  %-*s %d", valAt, width, bar, c))
+		lines = append(lines, fmt.Sprintf(labelFmt, valAt, width, bar, c))
 	}
 	return lines
 }

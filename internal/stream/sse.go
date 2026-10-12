@@ -13,24 +13,30 @@ import (
 
 // SSEEvent represents a single Server-Sent Event.
 type SSEEvent struct {
-	ID        string        `json:"id,omitempty"`
-	Event     string        `json:"event,omitempty"`
-	Data      string        `json:"data"`
-	Retry     int           `json:"retry,omitempty"`
-	Timestamp time.Duration `json:"timestamp"` // elapsed time since connection started
-	Delta     time.Duration `json:"delta"`     // delta time since previous event
+	ID          string        `json:"id,omitempty"`
+	Event       string        `json:"event,omitempty"`
+	Data        string        `json:"data"`
+	Retry       int           `json:"retry,omitempty"`
+	Timestamp   time.Duration `json:"timestamp"`    // elapsed time since connection started
+	TimestampMs float64       `json:"timestamp_ms"` // elapsed time in milliseconds
+	Delta       time.Duration `json:"delta"`        // delta time since previous event
+	DeltaMs     float64       `json:"delta_ms"`     // delta time in milliseconds
 }
 
 // SSEResult stores the aggregate result of an SSE stream session.
 type SSEResult struct {
-	URL           string        `json:"url"`
-	StatusCode    int           `json:"status_code"`
-	TTFT          time.Duration `json:"ttft"` // Time to first token / first event
-	TotalDuration time.Duration `json:"total_duration"`
-	EventCount    int           `json:"event_count"`
-	TotalBytes    int64         `json:"total_bytes"`
-	Events        []SSEEvent    `json:"events"`
-	AvgDelta      time.Duration `json:"avg_delta"`
+	URL             string        `json:"url"`
+	StatusCode      int           `json:"status_code"`
+	TTFT            time.Duration `json:"ttft"` // Time to first token / first event
+	TTFTMs          float64       `json:"ttft_ms"`
+	TotalDuration   time.Duration `json:"total_duration"`
+	TotalDurationMs float64       `json:"total_duration_ms"`
+	EventCount      int           `json:"event_count"`
+	TotalBytes      int64         `json:"total_bytes"`
+	Events          []SSEEvent    `json:"events"`
+	AvgDelta        time.Duration `json:"avg_delta"`
+	AvgDeltaMs      float64       `json:"avg_delta_ms"`
+	CloseReason     string        `json:"close_reason,omitempty"`
 }
 
 // SSEOptions specifies configuration for connecting and reading an SSE stream.
@@ -112,7 +118,9 @@ func StreamSSE(ctx context.Context, targetURL string, opts SSEOptions) (*SSEResu
 						currentEvent.Data = strings.Join(dataLines, "\n")
 						now := time.Now()
 						currentEvent.Timestamp = now.Sub(start)
+						currentEvent.TimestampMs = float64(currentEvent.Timestamp.Microseconds()) / 1000.0
 						currentEvent.Delta = now.Sub(lastEventTime)
+						currentEvent.DeltaMs = float64(currentEvent.Delta.Microseconds()) / 1000.0
 						lastEventTime = now
 
 						if firstEvent {
@@ -127,6 +135,7 @@ func StreamSSE(ctx context.Context, targetURL string, opts SSEOptions) (*SSEResu
 								opts.OnEvent(currentEvent)
 							}
 							if opts.MaxEvents > 0 && res.EventCount >= opts.MaxEvents {
+								res.CloseReason = "max_events"
 								readDone <- nil
 								return
 							}
@@ -172,7 +181,9 @@ func StreamSSE(ctx context.Context, targetURL string, opts SSEOptions) (*SSEResu
 						currentEvent.Data = strings.Join(dataLines, "\n")
 						now := time.Now()
 						currentEvent.Timestamp = now.Sub(start)
+						currentEvent.TimestampMs = float64(currentEvent.Timestamp.Microseconds()) / 1000.0
 						currentEvent.Delta = now.Sub(lastEventTime)
+						currentEvent.DeltaMs = float64(currentEvent.Delta.Microseconds()) / 1000.0
 						if firstEvent {
 							res.TTFT = currentEvent.Timestamp
 						}
@@ -184,6 +195,7 @@ func StreamSSE(ctx context.Context, targetURL string, opts SSEOptions) (*SSEResu
 							}
 						}
 					}
+					res.CloseReason = "eof"
 					readDone <- nil
 					return
 				}
@@ -197,9 +209,11 @@ func StreamSSE(ctx context.Context, targetURL string, opts SSEOptions) (*SSEResu
 	if opts.Timeout > 0 {
 		select {
 		case <-ctx.Done():
+			res.CloseReason = "canceled"
 			readErr = ctx.Err()
 		case <-time.After(opts.Timeout):
 			// Timeout reached, gracefully complete
+			res.CloseReason = "timeout"
 			readErr = nil
 		case err := <-readDone:
 			readErr = err
@@ -207,6 +221,7 @@ func StreamSSE(ctx context.Context, targetURL string, opts SSEOptions) (*SSEResu
 	} else {
 		select {
 		case <-ctx.Done():
+			res.CloseReason = "canceled"
 			readErr = ctx.Err()
 		case err := <-readDone:
 			readErr = err
@@ -214,12 +229,15 @@ func StreamSSE(ctx context.Context, targetURL string, opts SSEOptions) (*SSEResu
 	}
 
 	res.TotalDuration = time.Since(start)
+	res.TTFTMs = float64(res.TTFT.Microseconds()) / 1000.0
+	res.TotalDurationMs = float64(res.TotalDuration.Microseconds()) / 1000.0
 	if res.EventCount > 0 {
 		var totalDelta time.Duration
 		for _, ev := range res.Events {
 			totalDelta += ev.Delta
 		}
 		res.AvgDelta = totalDelta / time.Duration(res.EventCount)
+		res.AvgDeltaMs = float64(res.AvgDelta.Microseconds()) / 1000.0
 	}
 
 	return res, readErr

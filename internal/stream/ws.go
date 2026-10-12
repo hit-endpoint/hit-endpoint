@@ -33,22 +33,25 @@ const (
 
 // WSMessage represents a WebSocket message sent or received.
 type WSMessage struct {
-	Direction string        `json:"direction"` // "sent" or "received"
-	Type      string        `json:"type"`      // "text" or "binary"
-	Data      string        `json:"data"`
-	Timestamp time.Duration `json:"timestamp"`
+	Direction   string        `json:"direction"` // "sent" or "received"
+	Type        string        `json:"type"`      // "text" or "binary"
+	Data        string        `json:"data"`
+	Timestamp   time.Duration `json:"timestamp"`
+	TimestampMs float64       `json:"timestamp_ms"`
 }
 
 // WSResult captures the aggregate outcome of a WebSocket interaction.
 type WSResult struct {
-	URL              string        `json:"url"`
-	Connected        bool          `json:"connected"`
-	HandshakeLatency time.Duration `json:"handshake_latency"`
-	TotalDuration    time.Duration `json:"total_duration"`
-	MessagesSent     int           `json:"messages_sent"`
-	MessagesReceived int           `json:"messages_received"`
-	Messages         []WSMessage   `json:"messages"`
-	MatchedExpect    bool          `json:"matched_expect"`
+	URL                string        `json:"url"`
+	Connected          bool          `json:"connected"`
+	HandshakeLatency   time.Duration `json:"handshake_latency"`
+	HandshakeLatencyMs float64       `json:"handshake_latency_ms"`
+	TotalDuration      time.Duration `json:"total_duration"`
+	TotalDurationMs    float64       `json:"total_duration_ms"`
+	MessagesSent       int           `json:"messages_sent"`
+	MessagesReceived   int           `json:"messages_received"`
+	Messages           []WSMessage   `json:"messages"`
+	MatchedExpect      bool          `json:"matched_expect"`
 }
 
 // WSOptions configures WebSocket client connections and behavior.
@@ -325,26 +328,32 @@ func (ws *WSConn) ReadMessage(timeout time.Duration) (*WSMessage, error) {
 			_ = ws.Close()
 			return nil, io.EOF
 		case opText:
+			ts := time.Since(ws.startTime)
 			return &WSMessage{
-				Direction: "received",
-				Type:      "text",
-				Data:      string(payload),
-				Timestamp: time.Since(ws.startTime),
+				Direction:   "received",
+				Type:        "text",
+				Data:        string(payload),
+				Timestamp:   ts,
+				TimestampMs: float64(ts.Microseconds()) / 1000.0,
 			}, nil
 		case opBinary:
+			ts := time.Since(ws.startTime)
 			return &WSMessage{
-				Direction: "received",
-				Type:      "binary",
-				Data:      string(payload),
-				Timestamp: time.Since(ws.startTime),
+				Direction:   "received",
+				Type:        "binary",
+				Data:        string(payload),
+				Timestamp:   ts,
+				TimestampMs: float64(ts.Microseconds()) / 1000.0,
 			}, nil
 		case opContinuation:
+			ts := time.Since(ws.startTime)
 			// Return as text for now
 			return &WSMessage{
-				Direction: "received",
-				Type:      "continuation",
-				Data:      string(payload),
-				Timestamp: time.Since(ws.startTime),
+				Direction:   "received",
+				Type:        "continuation",
+				Data:        string(payload),
+				Timestamp:   ts,
+				TimestampMs: float64(ts.Microseconds()) / 1000.0,
 			}, nil
 		default:
 			// Unrecognized opcode
@@ -366,10 +375,11 @@ func RunWS(ctx context.Context, targetURL string, opts WSOptions) (*WSResult, er
 	defer conn.Close()
 
 	res := &WSResult{
-		URL:              targetURL,
-		Connected:        true,
-		HandshakeLatency: handshakeLatency,
-		Messages:         make([]WSMessage, 0),
+		URL:                targetURL,
+		Connected:          true,
+		HandshakeLatency:   handshakeLatency,
+		HandshakeLatencyMs: float64(handshakeLatency.Microseconds()) / 1000.0,
+		Messages:           make([]WSMessage, 0),
 	}
 
 	var expectRegex *regexp.Regexp
@@ -403,11 +413,13 @@ func RunWS(ctx context.Context, targetURL string, opts WSOptions) (*WSResult, er
 				if err := conn.SendText(msg); err != nil {
 					return
 				}
+				ts := time.Since(startTime)
 				sentMsg := WSMessage{
-					Direction: "sent",
-					Type:      "text",
-					Data:      msg,
-					Timestamp: time.Since(startTime),
+					Direction:   "sent",
+					Type:        "text",
+					Data:        msg,
+					Timestamp:   ts,
+					TimestampMs: float64(ts.Microseconds()) / 1000.0,
 				}
 				res.muLock(func() {
 					res.Messages = append(res.Messages, sentMsg)
@@ -455,6 +467,7 @@ func RunWS(ctx context.Context, targetURL string, opts WSOptions) (*WSResult, er
 	}
 
 	res.TotalDuration = time.Since(startTime)
+	res.TotalDurationMs = float64(res.TotalDuration.Microseconds()) / 1000.0
 	return res, nil
 }
 

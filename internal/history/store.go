@@ -28,25 +28,26 @@ type TestSummary struct {
 }
 
 type Entry struct {
-	ID              string            `json:"id"`
-	Timestamp       string            `json:"timestamp"` // ISO 8601 UTC
-	Source          string            `json:"source"`    // "adhoc", "run", "flow"
-	Ref             string            `json:"ref,omitempty"`
-	Zone            string            `json:"zone,omitempty"`
-	Server          string            `json:"server,omitempty"`
-	Method          string            `json:"method"`
-	Url             string            `json:"url"`
-	Headers         map[string]string `json:"headers,omitempty"`
-	Body            string            `json:"body,omitempty"`
-	Status          int               `json:"status"`
-	Reason          string            `json:"reason"`
-	ElapsedMs       float64           `json:"elapsed_ms"`
-	ResponseSize    int64             `json:"response_size"`
-	ResponseHeaders map[string]string `json:"response_headers,omitempty"`
-	ResponseBody    string            `json:"response_body,omitempty"`
-	Tests           []TestSummary     `json:"tests,omitempty"`
-	Captures        map[string]any    `json:"captures,omitempty"`
-	Error           string            `json:"error,omitempty"`
+	ID              string                `json:"id"`
+	Timestamp       string                `json:"timestamp"` // ISO 8601 UTC
+	Source          string                `json:"source"`    // "adhoc", "run", "flow"
+	Ref             string                `json:"ref,omitempty"`
+	Zone            string                `json:"zone,omitempty"`
+	Server          string                `json:"server,omitempty"`
+	Method          string                `json:"method"`
+	Url             string                `json:"url"`
+	Headers         map[string]string     `json:"headers,omitempty"`
+	Body            string                `json:"body,omitempty"`
+	Status          int                   `json:"status"`
+	Reason          string                `json:"reason"`
+	ElapsedMs       float64               `json:"elapsed_ms"`
+	Timings         *types.RequestTimings `json:"timings,omitempty"`
+	ResponseSize    int64                 `json:"response_size"`
+	ResponseHeaders map[string]string     `json:"response_headers,omitempty"`
+	ResponseBody    string                `json:"response_body,omitempty"`
+	Tests           []TestSummary         `json:"tests,omitempty"`
+	Captures        map[string]any        `json:"captures,omitempty"`
+	Error           string                `json:"error,omitempty"`
 }
 
 type Store struct {
@@ -229,8 +230,8 @@ func NewEntryFromResult(r *types.Result, source, zoneName, serverName string, ma
 
 	reqBody := MaskJSONText(r.RequestBody, maskFn)
 	respText := MaskJSONText(r.Text, maskFn)
-	if len(respText) > 4000 {
-		respText = respText[:4000] + "... [truncated]"
+	if len(respText) > 64000 {
+		respText = respText[:64000] + "... [truncated]"
 	}
 
 	var tests []TestSummary
@@ -261,6 +262,7 @@ func NewEntryFromResult(r *types.Result, source, zoneName, serverName string, ma
 		Status:          r.Status,
 		Reason:          r.Reason,
 		ElapsedMs:       r.ElapsedMs,
+		Timings:         r.Timings,
 		ResponseSize:    r.Size,
 		ResponseHeaders: respHeaders,
 		ResponseBody:    respText,
@@ -347,6 +349,10 @@ func (s *Store) Get(idOrIndex string) (*Entry, error) {
 
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("history is empty")
+	}
+
+	if idOrIndex == "0" || strings.EqualFold(idOrIndex, "latest") {
+		idOrIndex = "1"
 	}
 
 	// Check if 1-based index (1 = most recent)

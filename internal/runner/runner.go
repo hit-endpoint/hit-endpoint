@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	"os/exec"
@@ -750,11 +751,32 @@ func (s *Session) runSingleSpec(sp *spec.RequestSpec, step map[string]any) *type
 		}
 	}
 
+	var (
+		dnsStart, dnsDone         time.Time
+		connectStart, connectDone time.Time
+		tlsStart, tlsDone         time.Time
+		gotConn, wroteReq         time.Time
+		firstByte                 time.Time
+	)
+	trace := &httptrace.ClientTrace{
+		DNSStart:          func(_ httptrace.DNSStartInfo) { dnsStart = time.Now() },
+		DNSDone:           func(_ httptrace.DNSDoneInfo) { dnsDone = time.Now() },
+		ConnectStart:      func(_, _ string) { connectStart = time.Now() },
+		ConnectDone:       func(_, _ string, _ error) { connectDone = time.Now() },
+		TLSHandshakeStart: func() { tlsStart = time.Now() },
+		TLSHandshakeDone:  func(_ tls.ConnectionState, _ error) { tlsDone = time.Now() },
+		GotConn:           func(_ httptrace.GotConnInfo) { gotConn = time.Now() },
+		WroteRequest:      func(_ httptrace.WroteRequestInfo) { wroteReq = time.Now() },
+		GotFirstResponseByte: func() {
+			firstByte = time.Now()
+		},
+	}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+
 	start := time.Now()
 	resp, err := reqClient.Do(req)
-	result.ElapsedMs = float64(time.Since(start).Nanoseconds()) / 1e6
-
 	if err != nil {
+		result.ElapsedMs = float64(time.Since(start).Nanoseconds()) / 1e6
 		result.Error = err.Error()
 		s.recordResult(result)
 		return result
@@ -762,6 +784,38 @@ func (s *Session) runSingleSpec(sp *spec.RequestSpec, step map[string]any) *type
 	defer resp.Body.Close()
 
 	respBytes, _ := io.ReadAll(resp.Body)
+	end := time.Now()
+	result.ElapsedMs = float64(end.Sub(start).Nanoseconds()) / 1e6
+
+	timings := &types.RequestTimings{}
+	if !dnsStart.IsZero() && !dnsDone.IsZero() && dnsDone.After(dnsStart) {
+		timings.DNS = float64(dnsDone.Sub(dnsStart).Nanoseconds()) / 1e6
+	}
+	if !connectStart.IsZero() && !connectDone.IsZero() && connectDone.After(connectStart) {
+		timings.Connect = float64(connectDone.Sub(connectStart).Nanoseconds()) / 1e6
+	}
+	if !tlsStart.IsZero() && !tlsDone.IsZero() && tlsDone.After(tlsStart) {
+		timings.SSL = float64(tlsDone.Sub(tlsStart).Nanoseconds()) / 1e6
+	}
+	if !gotConn.IsZero() && !wroteReq.IsZero() && wroteReq.After(gotConn) {
+		timings.Send = float64(wroteReq.Sub(gotConn).Nanoseconds()) / 1e6
+	}
+	waitStart := wroteReq
+	if waitStart.IsZero() {
+		waitStart = gotConn
+	}
+	if waitStart.IsZero() {
+		waitStart = start
+	}
+	if !firstByte.IsZero() && firstByte.After(waitStart) {
+		timings.Wait = float64(firstByte.Sub(waitStart).Nanoseconds()) / 1e6
+	} else {
+		timings.Wait = result.ElapsedMs
+	}
+	if !firstByte.IsZero() && end.After(firstByte) {
+		timings.Receive = float64(end.Sub(firstByte).Nanoseconds()) / 1e6
+	}
+	result.Timings = timings
 	result.Status = resp.StatusCode
 	result.HasStatus = true
 	result.Reason = http.StatusText(resp.StatusCode)

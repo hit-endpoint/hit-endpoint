@@ -62,13 +62,13 @@ auth: inherit                       # default: environment auth, or the nearest 
 
 ## Request file (collections/**/*.yaml)
 
-Every key except `url` is optional. `method` defaults to GET.
+Every key except `url` (or `path`) is optional. `method` defaults to GET.
 
 ```yaml
 name: Create a pet                  # display name; defaults to the file stem
 description: Free text.
 method: POST
-url: "{{base_url}}/pets"            # absolute, or relative to the environment base_url
+url: "{{base_url}}/pets"            # absolute, or relative to the environment base_url (alias: path:)
 headers:
   Idempotency-Key: "{{$uuid}}"
   Accept: null                      # null removes a header inherited from _defaults.yaml
@@ -92,15 +92,15 @@ follow_redirects: true
 verify: true                        # false, or a path to a CA bundle
 vars:                               # request-level defaults, overridden by captured state and --var
   kind: dog
-tests:                              # list; see Tests
+tests:                              # list (or assert: map/list); see Tests
   - status: 201
   - json: {id: {type: integer}}
 captures:                           # name -> jmespath over {status, headers, json, text, ms}
   new_pet_id: json.id
   new_pet_location: headers.location
 hooks:                              # optional scripts, paths relative to the request file or zone root
-  before: scripts/sign.py           # def before(request, ctx): request.headers[...] = ...
-  after: scripts/check.py           # def after(result, ctx): assert ...; ctx.set("k", v)
+  before: scripts/sign.py           # def run(session): or def before(request, ctx):
+  after: scripts/check.py           # def run(session): or def after(result, ctx):
 ```
 
 A body given as a bare mapping is treated as `json:`. A bare string is `raw:`.
@@ -134,12 +134,12 @@ Unresolved variables fail the request and name every missing variable. `--lenien
 
 ## Tests
 
-Each list item is a mapping; keys may be combined. A `name` makes the item report as one line.
+Each list item is a mapping; keys may be combined. A `name` makes the item report as one line. Concise `assert:` mappings (with `latency: < 250ms` and `body.<field>: value`) are also supported.
 
 ```yaml
 tests:
   - status: 200                     # int, list [200, 201], or pattern "2xx"
-  - max_ms: 500
+  - max_ms: 500                     # or latency: < 500ms
   - json:                           # key = jmespath into the JSON body, value = matcher
       name: Rex                     # scalar = equals (loose: "200" == 200)
       "items[0].id": {type: integer, gt: 0}
@@ -169,7 +169,7 @@ Without tests, a request passes when status < 400. Exit code 0 = all passed, 1 =
 Automatically synthesize tests from live responses, history records, or request specs:
 ```bash
 hit assert https://api.example.com/users/1           # infer from live HTTP response
-hit assert 1                                         # infer from most recent history entry
+hit assert 1                                         # infer from most recent history entry (1 or 0)
 hit assert users/get --save                          # update request file with inferred tests
 hit assert users/get --append                        # append without replacing existing tests
 hit new users/profile -u https://api.example.com/me --infer
@@ -184,7 +184,7 @@ Header names are lower-case: `headers.location`, `headers."x-request-id"`.
 `$.a.b` is accepted as shorthand for `json.a.b`. Captured values are written to
 `.hit/state/<env>.json` and become variables for every later request in that environment.
 
-## Flows (flows/<name>.yaml)
+## Flows (chains/<name>.yaml or flows/<name>.yaml)
 
 ```yaml
 name: Login then list
@@ -202,7 +202,7 @@ steps:
   - request: petstore/pets/get
     replace_tests: [{status: 404}]  # replaces the file's tests instead of adding
   - set: {first_pet_id: "{{new_pet_id}}"}     # rendered, stored like a capture
-  - python: scripts/enrich.py       # def run(session): ... ; return value is printed
+  - script: scripts/enrich.py       # (or python:) def run(session): ...
   - sleep: 0.5
   - flow: other-flow                # nest another flow
 ```
@@ -212,9 +212,10 @@ Flows stop at the first failing step unless run with `--keep-going`.
 ## Commands
 
 ```
-hit [METHOD] URL [-H k:v] [-q k=v] [-j JSON|@file] [-b TEXT|@file] [-f k=v] [--auth bearer:T|basic:U:P|none]
-                          [--status N] [--test EXPR] [--capture NAME=EXPR] [--json] [-v]
-                          prints full response (status line, headers, and body) [default]
+hit [METHOD] URL [-H k:v] [-q k=v] [-j JSON|@file] [-b TEXT|@file] [-f k=v]
+                 [--auth bearer:T|basic:U:P|cookie:K=V|apikey:H:V|none] [--timeout D]
+                 [--status N] [--test EXPR] [--capture NAME=EXPR] [--json] [-v]
+                 prints full response (status line, headers, and body) [default]
 hit body [METHOD] URL ...        prints just the response body (formatted JSON / raw)
 hit code [METHOD] URL ...        prints just the HTTP status code (e.g. 200, 404)
 hit time [METHOD] URL [--ms]     prints just the response duration (e.g. 45ms, 1.2s)
@@ -229,22 +230,22 @@ hit validate [REF|FOLDER ...]       load and render every request; report errors
 hit sanity [COLLECTION] [--offline] [--json]   readiness checklist: environment, credentials, files, server
 hit policy [DIR|REF] [--strict] [--junit FILE] [--json]   governance linter: assertions, SLA ceilings, secrets hygiene
 hit lint [DIR|REF] [--strict] [--junit FILE] [--json]     alias for hit policy
-hit run REF... [-e ENV] [--var k=v] [--json] [--body] [--code] [--time] [-v] [--headers] [--quiet] [--full]
-                [--fail-fast] [--keep-going] [--no-persist] [--lenient] [-H k:v] [-q k=v]
-                [--junit FILE] [--webhook-on-failure URL] [--publish] [--enforce-policy]
-                [--format=github|agent] [--html FILE] [--har FILE]
-hit perf REF [-c N] [--workers LIST] [--distribute N] [-n N | -d SECONDS] [--rps N] [--warmup N] [--ramp-up S] [--threshold SPEC] [--check] [--junit FILE] [--csv FILE] [--json]
+hit run REF... [-s SERVER] [--var k=v] [--json] [--body] [--code] [--time] [-v] [--headers] [--quiet] [--full]
+               [--fail-fast] [--keep-going] [--no-persist] [--lenient] [-H k:v] [-q k=v]
+               [--junit FILE] [--webhook-on-failure URL] [--publish] [--enforce-policy]
+               [--format=github|agent] [--html FILE] [--har FILE]
+hit perf REF [-c N] [-n N | -d SECONDS] [--workers LIST] [--distribute N] [--rps N] [--warmup N] [--ramp-up S] [--threshold SPEC] [--check] [--junit FILE] [--csv FILE] [--json]
 hit perf worker [--port PORT] [--region REGION] [--id ID]
 hit cost [<FILE|REF>] [-n CALLS] [--tiers SPEC] [--pricing FILE] [--preset NAME] [--budget AMOUNT]
 hit history [ls] [--limit N] [--status N] [--ref PATTERN] [--json]
 hit history show <ID|INDEX> [--json]
 hit history save <ID|INDEX> <FILE.yaml> [--infer]
 hit history clear
-hit replay <ID|INDEX> [-e ENV] [--var k=v] [--diff] [--headers] [--body-only] [--json]
+hit replay <ID|INDEX> [-s SERVER] [--var k=v] [--diff] [--dry-run] [-y] [--headers] [--body-only] [--json]
 hit diff <ID|INDEX> [<ID|INDEX>] [--headers] [--body-only] [--json] [--context N]
 hit report html [-o FILE] [-n LIMIT]
 hit report har [-o FILE] [-n LIMIT] [--status N] [--ref PATTERN]
-hit report coverage --openapi SPEC [--json]
+hit report coverage --openapi SPEC [--strict] [--json]
 hit report latency [-t THRESHOLD%] [--json]
 hit assert <URL|ID|REF> [--save [FILE]] [--append [FILE]] [--strict] [--no-latency] [--no-headers] [--json]
 hit graphql <URL|REF> [-q QUERY|@file] [-v VARS|@file] [-o OP] [--introspect] [--sdl] [--fail-on-errors] [--json]
@@ -376,7 +377,7 @@ hit sse https://api.example.com/stream -n 10
 hit sse https://api.example.com/stream -d 15s --event user_updated --json
 
 # Pure Go RFC 6455 WebSocket client
-hit ws wss://echo.websocket.events -m "ping" --expect "ping"
+hit ws ws://127.0.0.1:8765/ws -m "ping" --expect "ping"
 hit ws wss://api.example.com/ws -H "Authorization: Bearer token" -m "sub" -d 5s
 ```
 
@@ -426,7 +427,7 @@ cd my-zone && hit sanity
 
 ## Synthetic API Monitoring & Incident Alerting
 
-Run Git-native multi-region consensus checks and continuous synthetic monitoring daemons with automated incident alerts to PagerDuty, Slack Block Kit, and Opsgenie:
+Run Git-native multi-region consensus checks and continuous synthetic monitoring daemons with automated incident alerts to PagerDuty, Slack Block Kit, Opsgenie, and custom Webhooks:
 
 ```bash
 # Run immediate multi-region consensus check (defaults: us-east, eu-central, ap-southeast)
@@ -461,6 +462,8 @@ alerts:
     severity: critical
   slack:
     webhook_url: "$env:SLACK_WEBHOOK_URL"
+  webhook:
+    url: "$env:ALERT_WEBHOOK_URL"
 ```
 
 ## Distributed Cloud Load Testing & Fleet Auto-Discovery

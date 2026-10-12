@@ -60,7 +60,7 @@ The server blocked the request with `401 Unauthorized` because no `Authorization
 
 ### Exercise 3.2: Authenticating and Capturing a Token
 
-To authenticate, we send our credentials to `/auth/login`. We also tell `hit` to **capture** the generated `access_token` from the response JSON:
+To authenticate, we send our credentials to `/auth/login`. We also tell `hit` to **capture** the generated `access_token` (or `token`) from the response JSON:
 
 ```bash
 ./hit POST http://127.0.0.1:8765/auth/login \
@@ -70,10 +70,13 @@ To authenticate, we send our credentials to `/auth/login`. We also tell `hit` to
 
 **Output**:
 ```
-ad hoc  POST http://127.0.0.1:8765/auth/login  →  200 OK  0 ms  68 B
+ad hoc  POST http://127.0.0.1:8765/auth/login  →  200 OK  0 ms  115 B
   ↳ my_token = mock-jwt-token-admin
 {
+  "access_token": "demo-token-123",
+  "expires_in": 3600,
   "token": "mock-jwt-token-admin",
+  "token_type": "bearer",
   "username": "admin"
 }
 ```

@@ -35,7 +35,7 @@ hit run collections/ --enforce-policy
 
 ## Policy Configuration (`policy.yaml`)
 
-Define your team or organization standards in `.hit/policy.yaml`, `policy.yaml` (in the zone root), or directly inside `zone.yaml` under the `policy:` key:
+Define your team or organization standards in `.hit/policy.yaml`, `policy.yaml` (in the zone root), or directly inside `zone.yaml` under the `policy:` key. Both nested `rules:` blocks and flat top-level keys are supported:
 
 ```yaml
 # policy.yaml
@@ -48,7 +48,7 @@ rules:
     - latency     # Every endpoint must declare a max latency SLA
     - body        # Every endpoint must assert JSON/body structure
 
-  # Maximum allowed latency ceiling across all test definitions
+  # Maximum allowed latency ceiling across all test definitions (and at runtime with --enforce-policy)
   max_latency: 2000ms
 
   # Block insecure TLS configurations (verify: false) in git
@@ -71,7 +71,7 @@ rules:
 | Rule | Type | Description |
 |---|---|---|
 | `require_assertions` | `[]string` | Required assertions (`status`, `latency`, `body`). Flags any request missing these checks. |
-| `max_latency` | `duration` | Upper threshold for declared latency assertions. Fails if a test allows e.g. `< 5000ms` when policy specifies `2000ms`. |
+| `max_latency` | `duration` | Upper threshold for declared latency assertions (and live response duration when `--enforce-policy` is used). |
 | `disallow_insecure_tls` | `bool` | Flags `verify: false` in test files. Enforces HTTPS validation in CI. |
 | `disallow_hardcoded_secrets` | `bool` | Scans headers and auth configurations for raw JWT tokens (`ey...`), bearer tokens, and static API keys. |
 | `require_auth` | `bool` | Ensures every request explicitly defines its authentication scheme or marks `auth: none`. |

@@ -53,6 +53,7 @@ type ResponseDiff struct {
 	SizeDelta      int64        `json:"size_delta"`
 	HeaderDiffs    []HeaderDiff `json:"header_diffs,omitempty"`
 	BodyIsJSON     bool         `json:"body_is_json"`
+	Truncated      bool         `json:"truncated,omitempty"`
 	Hunks          []Hunk       `json:"hunks,omitempty"`
 	HasDifferences bool         `json:"has_differences"`
 }
@@ -230,14 +231,34 @@ func GroupHunks(diffs []DiffLine, contextLines int) []Hunk {
 	return hunks
 }
 
+// IsVolatileHeader returns true for ephemeral per-request headers that vary between identical responses.
+func IsVolatileHeader(k string) bool {
+	lk := strings.ToLower(strings.TrimSpace(k))
+	switch lk {
+	case "date", "cf-ray", "x-request-id", "x-correlation-id", "x-amzn-requestid",
+		"x-runtime", "age", "cf-cache-status", "x-served-by", "x-timer", "report-to", "nel":
+		return true
+	}
+	if strings.HasPrefix(lk, "x-ratelimit-") || strings.HasPrefix(lk, "ratelimit-") {
+		return true
+	}
+	return false
+}
+
 // CompareHeaders finds additions, deletions, and modifications between headers.
 func CompareHeaders(oldH, newH map[string]string) []HeaderDiff {
 	var diffs []HeaderDiff
 	displayNames := make(map[string]string)
 	for k := range oldH {
+		if IsVolatileHeader(k) {
+			continue
+		}
 		displayNames[strings.ToLower(k)] = k
 	}
 	for k := range newH {
+		if IsVolatileHeader(k) {
+			continue
+		}
 		if _, exists := displayNames[strings.ToLower(k)]; !exists {
 			displayNames[strings.ToLower(k)] = k
 		}
@@ -295,6 +316,7 @@ func Compare(
 		OldSize:        oldSize,
 		NewSize:        newSize,
 		SizeDelta:      newSize - oldSize,
+		Truncated:      strings.HasSuffix(oldBody, "... [truncated]") || strings.HasSuffix(newBody, "... [truncated]"),
 	}
 
 	if diff.StatusChanged {
@@ -303,7 +325,7 @@ func Compare(
 
 	// Compare Headers
 	diff.HeaderDiffs = CompareHeaders(oldHeaders, newHeaders)
-	if len(diff.HeaderDiffs) > 0 {
+	if len(diff.HeaderDiffs) > 0 && !opts.BodyOnly {
 		diff.HasDifferences = true
 	}
 
@@ -332,6 +354,10 @@ func Compare(
 // FormatTerminal generates human-readable ANSI colored diff output.
 func (d *ResponseDiff) FormatTerminal(p *output.Printer, opts Options) string {
 	var sb strings.Builder
+
+	if d.Truncated {
+		sb.WriteString(p.Yellow("⚠ Warning: one or both response bodies were truncated in history storage; diff may be incomplete.\n"))
+	}
 
 	if !opts.BodyOnly {
 		sb.WriteString(p.Bold(fmt.Sprintf("Diff: %s  ←  %s\n", d.OldLabel, d.NewLabel)))

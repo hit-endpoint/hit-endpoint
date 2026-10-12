@@ -1317,8 +1317,53 @@ func TestWizardCommand(t *testing.T) {
 	}
 }
 
+func TestPhase5ValidationsAndPolish(t *testing.T) {
+	// 1. Cost estimator input validation
+	code, _, stderr := captureOutput(func() int {
+		return run([]string{"cost", "-n", "0"})
+	})
+	if code != ExitUsage {
+		t.Errorf("expected ExitUsage (2) for calls <= 0, got %d (stderr: %s)", code, stderr)
+	}
 
+	code, _, stderr = captureOutput(func() int {
+		return run([]string{"cost", "-n", "100", "--retries", "-1"})
+	})
+	if code != ExitUsage {
+		t.Errorf("expected ExitUsage (2) for negative retries, got %d (stderr: %s)", code, stderr)
+	}
 
+	code, _, stderr = captureOutput(func() int {
+		return run([]string{"cost", "-n", "100", "--failure-rate", "150%"})
+	})
+	if code != ExitUsage {
+		t.Errorf("expected ExitUsage (2) for failure-rate > 100%%, got %d (stderr: %s)", code, stderr)
+	}
 
+	// Budget exceeded returns ExitFail (1)
+	code, _, _ = captureOutput(func() int {
+		return run([]string{"cost", "-n", "100k", "--unit-price", "0.01", "--budget", "10"})
+	})
+	if code != ExitFail {
+		t.Errorf("expected ExitFail (1) when budget exceeded, got %d", code)
+	}
 
+	// 2. Shorthand collision checks
+	tmpZone := t.TempDir()
+	_ = run([]string{"init", tmpZone})
+	code, _, stderr = captureOutput(func() int {
+		return run([]string{"-z", tmpZone, "shorthand", "set", "run", "http://127.0.0.1:8765/health"})
+	})
+	if code != ExitUsage || !strings.Contains(stderr, "collides") {
+		t.Errorf("expected shorthand collision rejection for 'run', got code %d, stderr: %s", code, stderr)
+	}
+
+	// 3. Embedded reference.md matches root reference.md
+	rootRef, err := os.ReadFile("../../reference.md")
+	if err == nil {
+		if string(rootRef) != referenceDoc {
+			t.Errorf("cmd/hit/reference.md does not match root reference.md")
+		}
+	}
+}
 

@@ -239,6 +239,9 @@ func EstimateRange(intendedCalls int64, cfg PricingConfig, budget *float64) Cost
 	if worstRate <= 0.0 {
 		worstRate = 0.25 // default 25%
 	}
+	if worstRate < expRate {
+		worstRate = expRate
+	}
 	worstEstimate := EstimateScenario(
 		"Worst-Case",
 		intendedCalls,

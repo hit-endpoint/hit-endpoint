@@ -122,12 +122,12 @@ type HARCache struct{}
 
 type HARTimings struct {
 	Blocked float64 `json:"blocked,omitempty"`
-	DNS     float64 `json:"dns,omitempty"`
-	Connect float64 `json:"connect,omitempty"`
+	DNS     float64 `json:"dns"`
+	Connect float64 `json:"connect"`
 	Send    float64 `json:"send"`
 	Wait    float64 `json:"wait"`
 	Receive float64 `json:"receive"`
-	SSL     float64 `json:"ssl,omitempty"`
+	SSL     float64 `json:"ssl"`
 	Comment string  `json:"comment,omitempty"`
 }
 
@@ -333,6 +333,22 @@ func BuildHARFromResults(results []*types.Result) *HAR {
 			comment = r.Name
 		}
 
+		timings := HARTimings{
+			Send:    0,
+			Wait:    r.ElapsedMs,
+			Receive: 0,
+		}
+		if r.Timings != nil {
+			timings = HARTimings{
+				DNS:     r.Timings.DNS,
+				Connect: r.Timings.Connect,
+				SSL:     r.Timings.SSL,
+				Send:    r.Timings.Send,
+				Wait:    r.Timings.Wait,
+				Receive: r.Timings.Receive,
+			}
+		}
+
 		entry := HAREntry{
 			StartedDateTime: startedStr,
 			Time:            r.ElapsedMs,
@@ -362,12 +378,8 @@ func BuildHARFromResults(results []*types.Result) *HAR {
 				HeadersSize: estimateHeadersSize(respHeaders),
 				BodySize:    contentSize,
 			},
-			Cache: HARCache{},
-			Timings: HARTimings{
-				Send:    0,
-				Wait:    r.ElapsedMs,
-				Receive: 0,
-			},
+			Cache:   HARCache{},
+			Timings: timings,
 			Comment: comment,
 		}
 
@@ -431,6 +443,22 @@ func BuildHARFromHistory(entries []*history.Entry) *HAR {
 			comment = fmt.Sprintf("%s (%s)", e.Ref, e.ID)
 		}
 
+		timings := HARTimings{
+			Send:    0,
+			Wait:    e.ElapsedMs,
+			Receive: 0,
+		}
+		if e.Timings != nil {
+			timings = HARTimings{
+				DNS:     e.Timings.DNS,
+				Connect: e.Timings.Connect,
+				SSL:     e.Timings.SSL,
+				Send:    e.Timings.Send,
+				Wait:    e.Timings.Wait,
+				Receive: e.Timings.Receive,
+			}
+		}
+
 		entry := HAREntry{
 			StartedDateTime: startedStr,
 			Time:            e.ElapsedMs,
@@ -460,12 +488,8 @@ func BuildHARFromHistory(entries []*history.Entry) *HAR {
 				HeadersSize: estimateHeadersSize(respHeaders),
 				BodySize:    contentSize,
 			},
-			Cache: HARCache{},
-			Timings: HARTimings{
-				Send:    0,
-				Wait:    e.ElapsedMs,
-				Receive: 0,
-			},
+			Cache:   HARCache{},
+			Timings: timings,
 			Comment: comment,
 		}
 

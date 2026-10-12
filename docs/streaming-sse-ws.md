@@ -54,41 +54,41 @@ Stream Metrics & Scorecard:
 ```
 
 ### Automation & JSON Mode (`--json`)
-Export complete stream session metrics directly as machine-readable JSON:
+Export complete stream session metrics directly as machine-readable JSON (including millisecond float fields `ttft_ms`, `total_duration_ms`, `avg_delta_ms`, and `close_reason`):
 ```bash
-hit sse https://api.example.com/stream -n 5 --json | jq .ttft
+hit sse http://127.0.0.1:8765/sse -n 5 --json | jq .ttft_ms
 ```
 
 ---
 
 ## 🔌 RFC 6455 WebSocket Client (`hit ws`)
 
-`hit` includes a built-in pure Go standard library implementation of the RFC 6455 WebSocket protocol. Test duplex connections, handshake latency, message pipelines, and automated response assertions without needing third-party packages.
+`hit` includes a built-in pure Go standard library implementation of the RFC 6455 WebSocket protocol. Test duplex connections, handshake latency, message pipelines, and automated response assertions without needing third-party packages. The built-in mock server (`hit mock 8765 &`) also provides an offline WebSocket echo server at `ws://127.0.0.1:8765/ws` and an SSE stream at `http://127.0.0.1:8765/sse`.
 
 ### Basic Usage
 ```bash
-# Connect and listen for incoming messages (default 5s timeout)
-hit ws wss://echo.websocket.events
+# Connect to the local mock WebSocket echo endpoint (default 5s timeout)
+hit ws ws://127.0.0.1:8765/ws
 
 # Send a single message upon connection
-hit ws wss://echo.websocket.events -m "ping"
+hit ws ws://127.0.0.1:8765/ws -m "ping"
 
 # Send multiple sequential messages
-hit ws wss://echo.websocket.events -m "hello" -m "world"
+hit ws ws://127.0.0.1:8765/ws -m "hello" -m "world"
 
 # Add custom authentication headers
 hit ws wss://api.example.com/ws -H "Sec-WebSocket-Protocol: v1.json"
 
 # Stop after receiving N messages
-hit ws wss://echo.websocket.events -m "test" -n 1
+hit ws ws://127.0.0.1:8765/ws -m "test" -n 1
 ```
 
 ### Automated Message Assertions (`--expect`)
-Verify that the WebSocket server sends back a message containing an expected substring or regular expression pattern. If the pattern is not matched before timeout, `hit` exits with a non-zero exit code:
+Verify that the WebSocket server sends back a message containing an expected substring or regular expression pattern. If the pattern is not matched before timeout, `hit` exits with exit code `1`:
 
 ```bash
 # Assert that server echoes back the greeting
-hit ws wss://echo.websocket.events -m "greeting_payload" --expect "greeting_payload"
+hit ws ws://127.0.0.1:8765/ws -m "greeting_payload" --expect "greeting_payload"
 
 # Regex pattern assertion
 hit ws wss://api.example.com/ticker --expect '\"price\":\s*\d+'
@@ -96,7 +96,7 @@ hit ws wss://api.example.com/ticker --expect '\"price\":\s*\d+'
 
 ### Terminal Output
 ```text
-🔌 Connecting to WebSocket: wss://echo.websocket.events
+🔌 Connecting to WebSocket: ws://127.0.0.1:8765/ws
   → SENT: greeting_payload
   ← RECV: greeting_payload (+35ms)
 
@@ -112,15 +112,17 @@ WebSocket Summary:
 ### CI / Scripting JSON Export (`--json`)
 Pipe structured session diagnostics to downstream tools:
 ```bash
-hit ws wss://echo.websocket.events -m "ping" -n 1 --json
+hit ws ws://127.0.0.1:8765/ws -m "ping" -n 1 --json
 ```
 Output:
 ```json
 {
-  "url": "wss://echo.websocket.events",
+  "url": "ws://127.0.0.1:8765/ws",
   "connected": true,
   "handshake_latency": 28400000,
+  "handshake_latency_ms": 28.4,
   "total_duration": 35200000,
+  "total_duration_ms": 35.2,
   "messages_sent": 1,
   "messages_received": 1,
   "messages": [
@@ -128,13 +130,15 @@ Output:
       "direction": "sent",
       "type": "text",
       "data": "ping",
-      "timestamp": 0
+      "timestamp": 0,
+      "timestamp_ms": 0
     },
     {
       "direction": "received",
       "type": "text",
       "data": "ping",
-      "timestamp": 35200000
+      "timestamp": 35200000,
+      "timestamp_ms": 35.2
     }
   ],
   "matched_expect": true

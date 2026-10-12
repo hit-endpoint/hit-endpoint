@@ -13,14 +13,17 @@ hit mock 8765 &
 ```
 
 ### Pre-Configured Endpoints
-* `POST /auth/login`: Authenticates user credentials (`username: admin`) and issues Bearer access tokens.
-* `GET /pets`: Returns paginated pet collections (supports `?kind=dog` and emits `X-Total-Count`).
-* `POST /pets`: Creates pets with automatic ID assignment.
-* `GET /pets/{id}`: Retrieves pet by ID (returns 404 if not found).
-* `DELETE /pets/{id}`: Deletes pet from in-memory state.
-* `GET /health`: Instant health check endpoint (200 OK).
-* `GET /slow?delay=500ms`: Latency simulator for timeout testing.
-* `POST /echo`: Mirrors request headers and payload.
+* `POST /auth/login`: Authenticates user credentials (`username: admin`, `password: hunter2` or `password`) and issues Bearer access tokens (`access_token` and `token`).
+* `GET /pets`: Returns paginated pet collections (supports `?kind=dog`, `?limit=2`, `?page=1` and emits `X-Total-Count`).
+* `POST /pets`: Creates pets with automatic ID assignment (`201 Created`).
+* `GET /pets/{id}`: Retrieves pet by ID (returns `404` if not found).
+* `PUT /pets/{id}` & `PATCH /pets/{id}`: Updates pet attributes by ID.
+* `DELETE /pets/{id}`: Deletes pet from in-memory state (`204 No Content`).
+* `GET /health`: Instant health check endpoint (`200 OK`).
+* `GET /slow?delay=500ms` (or `?ms=500`): Latency simulator for timeout testing.
+* `GET` / `POST` / `PUT` / `PATCH /echo`: Mirrors request method, headers, query parameters, and payload.
+* `GET /sse`: Streams Server-Sent Events (SSE) token chunks for `hit sse` testing.
+* `GET /ws`: RFC 6455 WebSocket echo endpoint for `hit ws` testing.
 
 ---
 

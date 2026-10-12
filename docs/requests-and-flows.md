@@ -90,12 +90,13 @@ hit show pets/create --curl         # Render as runnable cURL command
 
 | Flag | Purpose |
 |---|---|
-| `-e, --env <name>` | Select target environment (overrides `default_server`) |
+| `-s, --server <name>` | Select target server environment (overrides `default_server`; `-e` alias) |
 | `--var key=value` | Override variable value at runtime (repeatable) |
 | `--fail-fast` | Aborts execution immediately upon the first assertion failure |
 | `--keep-going` | Continues executing remaining requests even after failures |
 | `--no-persist` | Prevents writing captured variables back to `.hit/state/` |
 | `--lenient` | Ignores missing variables instead of failing with an error |
+| `--enforce-policy` | Evaluates zone governance rules and `max_latency` SLA at runtime |
 | `--body` / `--code` / `--time` | Trims output to body, status code, or response time |
 | `-v, --verbose` | Emits complete request and response payload headers |
 | `--quiet` | Suppresses pass/fail lines, emitting only final summary |
@@ -103,12 +104,12 @@ hit show pets/create --curl         # Render as runnable cURL command
 
 ---
 
-## Stateful Scenario Flows (`flows/*.yaml`)
+## Stateful Scenario Flows (`chains/*.yaml` or `flows/*.yaml`)
 
-While collections organize independent requests, **Flows** execute multi-step user journeys and integration lifecycles where state is shared across steps:
+While collections organize independent requests, **Scenario Chains / Flows** (stored in `chains/` or `flows/`) execute multi-step user journeys and integration lifecycles where state is shared across steps:
 
 ```yaml
-# flows/pet-lifecycle.yaml
+# chains/pet-lifecycle.yaml
 name: Pet CRUD Lifecycle Journey
 description: Authenticate, create pet, verify existence, update, delete, and confirm removal.
 
@@ -155,7 +156,7 @@ steps:
 
 ```bash
 hit run pet-lifecycle
-hit run flows/pet-lifecycle.yaml -e production
+hit run chains/pet-lifecycle.yaml -s production
 hit perf pet-lifecycle -c 10 -n 50       # Load test complete multi-step flows
 ```
 
@@ -182,7 +183,7 @@ hooks:
   after: scripts/verify_signature.py # Validates cryptographic receipt
 ```
 
-Hook scripts define a `run(session)` entrypoint with direct access to method, URL, headers, and body:
+Hook scripts support both `def run(session):` and `def before(prep, ctx):` / `def after(result, ctx):` entrypoints with direct access to `method`, `url`, `headers`, `query`, `body`, and session variables (`set(k, v)` / `get(k)`). Any `print()` output from hook scripts is automatically routed to `stderr` so it never corrupts JSON communication:
 
 ```python
 # scripts/sign_hmac.py

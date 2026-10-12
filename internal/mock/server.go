@@ -1,6 +1,9 @@
 package mock
 
 import (
+	"crypto/sha1"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -270,7 +273,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(parts) == 1 && parts[0] == "echo" {
+		if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+			s.handleWS(w, r)
+			return
+		}
 		s.handleEcho(w, r, u)
+		return
+	}
+	if len(parts) >= 1 && parts[0] == "ws" {
+		s.handleWS(w, r)
+		return
+	}
+	if len(parts) == 1 && (parts[0] == "sse" || parts[0] == "events") {
+		s.handleSSE(w, r, u)
 		return
 	}
 
@@ -574,6 +589,149 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, parts []st
 	}
 
 	s.sendJSON(w, http.StatusNotFound, map[string]string{"error": "not found"}, nil)
+}
+
+func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request, u *url.URL) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	count := 3
+	if cStr := u.Query().Get("count"); cStr != "" {
+		if parsed, err := strconv.Atoi(cStr); err == nil && parsed > 0 {
+			count = parsed
+		}
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	for i := 1; i <= count; i++ {
+		select {
+		case <-r.Context().Done():
+			return
+		default:
+		}
+		fmt.Fprintf(w, "id: %d\nevent: message\ndata: {\"seq\":%d,\"text\":\"token-%d\"}\n\n", i, i, i)
+		flusher.Flush()
+		if i < count {
+			time.Sleep(15 * time.Millisecond)
+		}
+	}
+}
+
+func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		s.sendJSON(w, http.StatusBadRequest, map[string]string{"error": "expected WebSocket Upgrade header"}, nil)
+		return
+	}
+	key := r.Header.Get("Sec-WebSocket-Key")
+	if key == "" {
+		s.sendJSON(w, http.StatusBadRequest, map[string]string{"error": "missing Sec-WebSocket-Key"}, nil)
+		return
+	}
+	const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+	h := sha1.New()
+	h.Write([]byte(key + wsGUID))
+	accept := base64.StdEncoding.EncodeToString(h.Sum(nil))
+
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "hijacking not supported", http.StatusInternalServerError)
+		return
+	}
+	conn, bufrw, err := hj.Hijack()
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	bufrw.WriteString("HTTP/1.1 101 Switching Protocols\r\n")
+	bufrw.WriteString("Upgrade: websocket\r\n")
+	bufrw.WriteString("Connection: Upgrade\r\n")
+	bufrw.WriteString(fmt.Sprintf("Sec-WebSocket-Accept: %s\r\n\r\n", accept))
+	_ = bufrw.Flush()
+
+	for {
+		b0, err := bufrw.ReadByte()
+		if err != nil {
+			return
+		}
+		b1, err := bufrw.ReadByte()
+		if err != nil {
+			return
+		}
+		opcode := b0 & 0x0F
+		masked := (b1 & 0x80) != 0
+		lenByte := b1 & 0x7F
+
+		var payloadLen int64
+		if lenByte <= 125 {
+			payloadLen = int64(lenByte)
+		} else if lenByte == 126 {
+			ext := make([]byte, 2)
+			if _, err := io.ReadFull(bufrw, ext); err != nil {
+				return
+			}
+			payloadLen = int64(binary.BigEndian.Uint16(ext))
+		} else {
+			ext := make([]byte, 8)
+			if _, err := io.ReadFull(bufrw, ext); err != nil {
+				return
+			}
+			payloadLen = int64(binary.BigEndian.Uint64(ext))
+		}
+
+		var maskKey []byte
+		if masked {
+			maskKey = make([]byte, 4)
+			if _, err := io.ReadFull(bufrw, maskKey); err != nil {
+				return
+			}
+		}
+
+		payload := make([]byte, payloadLen)
+		if _, err := io.ReadFull(bufrw, payload); err != nil {
+			return
+		}
+		if masked {
+			for i := int64(0); i < payloadLen; i++ {
+				payload[i] ^= maskKey[i%4]
+			}
+		}
+
+		if opcode == 0x8 { // Close
+			return
+		}
+		respOpcode := opcode
+		if opcode == 0x9 { // Ping -> Pong
+			respOpcode = 0xA
+		}
+
+		var frame []byte
+		frame = append(frame, 0x80|respOpcode)
+		if payloadLen <= 125 {
+			frame = append(frame, byte(payloadLen))
+		} else if payloadLen <= 65535 {
+			frame = append(frame, 126)
+			ext := make([]byte, 2)
+			binary.BigEndian.PutUint16(ext, uint16(payloadLen))
+			frame = append(frame, ext...)
+		} else {
+			frame = append(frame, 127)
+			ext := make([]byte, 8)
+			binary.BigEndian.PutUint64(ext, uint64(payloadLen))
+			frame = append(frame, ext...)
+		}
+		frame = append(frame, payload...)
+		if _, err := bufrw.Write(frame); err != nil {
+			return
+		}
+		_ = bufrw.Flush()
+	}
 }
 
 func (s *Server) ListenAndServe(port int) error {
