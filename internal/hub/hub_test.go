@@ -208,8 +208,16 @@ func TestHubServer_HTTPRoutes(t *testing.T) {
 		t.Errorf("expected dashboard_url to contain run_id, got %v", ingestResp["dashboard_url"])
 	}
 
-	// 4. Query Runs via GET /api/v1/runs
+	// 4. Query Runs via GET /api/v1/runs (Unauthorized first, then Authorized)
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil)
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 from unauthenticated list runs, got %d", rr.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil)
+	req.Header.Set("Authorization", "Bearer test_pat_secret")
 	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
@@ -218,6 +226,7 @@ func TestHubServer_HTTPRoutes(t *testing.T) {
 
 	// 5. Query Specific Run via GET /api/v1/runs/run_test_http
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/runs/run_test_http", nil)
+	req.Header.Set("Authorization", "Bearer test_pat_secret")
 	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
@@ -226,6 +235,7 @@ func TestHubServer_HTTPRoutes(t *testing.T) {
 
 	// 6. Query Nodes via GET /api/v1/nodes
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil)
+	req.Header.Set("Authorization", "Bearer test_pat_secret")
 	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
@@ -234,6 +244,7 @@ func TestHubServer_HTTPRoutes(t *testing.T) {
 
 	// 7. Render UI via GET /
 	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer test_pat_secret")
 	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
@@ -241,6 +252,25 @@ func TestHubServer_HTTPRoutes(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "Hit Cloud Fleet Hub") {
 		t.Errorf("expected HTML dashboard title in response")
+	}
+
+	// 8. Unknown API path returns 404 JSON instead of 200 HTML
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/does-not-exist", nil)
+	req.Header.Set("Authorization", "Bearer test_pat_secret")
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for unknown API path, got %d", rr.Code)
+	}
+
+	// 9. Empty/garbage run payload returns 400 Bad Request
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(`{"foo":"bar"}`))
+	req.Header.Set("Authorization", "Bearer test_pat_secret")
+	req.Header.Set("Content-Type", "application/json")
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for empty run payload, got %d", rr.Code)
 	}
 }
 
@@ -449,6 +479,7 @@ func TestHubServer_FleetHTTPRoutes(t *testing.T) {
 
 	// 4. Query Fleet Topology via GET /api/v1/fleet
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/fleet", nil)
+	req.Header.Set("Authorization", "Bearer fleet_secret_key")
 	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
@@ -464,6 +495,7 @@ func TestHubServer_FleetHTTPRoutes(t *testing.T) {
 
 	// 5. Query Fleet Workers via GET /api/v1/fleet/workers
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/fleet/workers?capability=perf-worker", nil)
+	req.Header.Set("Authorization", "Bearer fleet_secret_key")
 	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
@@ -492,6 +524,7 @@ func TestHubServer_FleetHTTPRoutes(t *testing.T) {
 
 	// After deregistration, worker should not be returned in available workers
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/fleet/workers", nil)
+	req.Header.Set("Authorization", "Bearer fleet_secret_key")
 	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	workersResp.Workers = nil
@@ -629,6 +662,7 @@ func TestHubServer_DispatchHTTPRoutes(t *testing.T) {
 
 	// 3. Worker queries /api/v1/nodes/{id}/queue to claim job
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/nodes/worker-dispatch-test/queue?region=eu-central", nil)
+	req.Header.Set("Authorization", "Bearer dispatch_secret")
 	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
@@ -647,6 +681,7 @@ func TestHubServer_DispatchHTTPRoutes(t *testing.T) {
 	// 4. Worker posts event via POST /api/v1/nodes/{id}/jobs/{job_id}/events
 	eventPayload := `{"level":"info","message":"Step 1: Sent GET /ping"}`
 	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/nodes/worker-dispatch-test/jobs/%s/events", createdJob.ID), strings.NewReader(eventPayload))
+	req.Header.Set("Authorization", "Bearer dispatch_secret")
 	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
@@ -665,6 +700,7 @@ func TestHubServer_DispatchHTTPRoutes(t *testing.T) {
 		}
 	}`, createdJob.ID)
 	req = httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/nodes/worker-dispatch-test/jobs/%s/complete", createdJob.ID), strings.NewReader(completePayload))
+	req.Header.Set("Authorization", "Bearer dispatch_secret")
 	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
@@ -673,6 +709,7 @@ func TestHubServer_DispatchHTTPRoutes(t *testing.T) {
 
 	// 6. Verify job details via GET /api/v1/dispatch/{id}
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/dispatch/"+createdJob.ID, nil)
+	req.Header.Set("Authorization", "Bearer dispatch_secret")
 	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {

@@ -244,8 +244,9 @@ type TokenManager struct {
 // NewTokenManager initializes a token manager.
 func NewTokenManager(duration time.Duration) *TokenManager {
 	return &TokenManager{
-		duration: duration,
-		tokens:   make(map[string]TokenInfo),
+		duration:   duration,
+		tokens:     make(map[string]TokenInfo),
+		legacyUsed: time.Now(),
 	}
 }
 
@@ -319,7 +320,7 @@ func (tm *TokenManager) Reset() {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	tm.tokens = make(map[string]TokenInfo)
-	tm.legacyUsed = time.Time{}
+	tm.legacyUsed = time.Now()
 }
 
 // ChaosEngine evaluates and applies active chaos conditions for incoming requests.

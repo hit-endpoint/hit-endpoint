@@ -243,6 +243,47 @@ func (z *Zone) Vars() map[string]any {
 	return make(map[string]any)
 }
 
+type CloudConfig struct {
+	Endpoint  string
+	ProjectID string
+	APIKey    string
+}
+
+func resolveEnvString(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "$env:") {
+		return os.Getenv(strings.TrimPrefix(s, "$env:"))
+	}
+	return s
+}
+
+func (z *Zone) CloudConfig() CloudConfig {
+	var cc CloudConfig
+	if z == nil || z.Config == nil {
+		return cc
+	}
+	raw, ok := z.Config["cloud"].(map[string]any)
+	if !ok || raw == nil {
+		return cc
+	}
+	if ep, ok := raw["endpoint"].(string); ok && strings.TrimSpace(ep) != "" {
+		cc.Endpoint = resolveEnvString(ep)
+	} else if u, ok := raw["url"].(string); ok && strings.TrimSpace(u) != "" {
+		cc.Endpoint = resolveEnvString(u)
+	}
+	if pid, ok := raw["project_id"].(string); ok && strings.TrimSpace(pid) != "" {
+		cc.ProjectID = resolveEnvString(pid)
+	} else if p, ok := raw["project"].(string); ok && strings.TrimSpace(p) != "" {
+		cc.ProjectID = resolveEnvString(p)
+	}
+	if key, ok := raw["api_key"].(string); ok && strings.TrimSpace(key) != "" {
+		cc.APIKey = resolveEnvString(key)
+	} else if tok, ok := raw["token"].(string); ok && strings.TrimSpace(tok) != "" {
+		cc.APIKey = resolveEnvString(tok)
+	}
+	return cc
+}
+
 func (z *Zone) ServerNames() []string {
 	dir := z.ServersDir()
 	entries, err := os.ReadDir(dir)
@@ -444,10 +485,16 @@ func (z *Zone) ResolveChain(ref string) (string, error) {
 	candidates := []string{
 		ref,
 		filepath.Join(z.ChainsDir(), ref),
+		filepath.Join(z.Root, "flows", ref),
 		filepath.Join(z.Root, ref),
 	}
 	if strings.HasPrefix(ref, "chains/") {
 		candidates = append(candidates, filepath.Join(z.Root, "chains", strings.TrimPrefix(ref, "chains/")))
+		candidates = append(candidates, filepath.Join(z.Root, "flows", strings.TrimPrefix(ref, "chains/")))
+	}
+	if strings.HasPrefix(ref, "flows/") {
+		candidates = append(candidates, filepath.Join(z.Root, "flows", strings.TrimPrefix(ref, "flows/")))
+		candidates = append(candidates, filepath.Join(z.Root, "chains", strings.TrimPrefix(ref, "flows/")))
 	}
 	for _, c := range append([]string{}, candidates...) {
 		if !isYAMLSuffix(c) {
@@ -470,20 +517,24 @@ func (z *Zone) ResolveChain(ref string) (string, error) {
 }
 
 func (z *Zone) ListChains() []string {
-	dir := z.ChainsDir()
-	if s, err := os.Stat(dir); err != nil || !s.IsDir() {
-		return nil
-	}
+	dirs := []string{z.ChainsDir(), filepath.Join(z.Root, "flows")}
+	seen := make(map[string]bool)
 	var found []string
-	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+	for _, dir := range dirs {
+		if s, err := os.Stat(dir); err != nil || !s.IsDir() {
+			continue
+		}
+		_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() {
+				return nil
+			}
+			if isYAMLSuffix(path) && !seen[path] {
+				seen[path] = true
+				found = append(found, path)
+			}
 			return nil
-		}
-		if isYAMLSuffix(path) {
-			found = append(found, path)
-		}
-		return nil
-	})
+		})
+	}
 	sort.Strings(found)
 	return found
 }
@@ -539,35 +590,30 @@ func (z *Zone) State(serverName string) *StateStore {
 }
 
 func Init(root string, name string) (*Zone, error) {
-	if err := os.MkdirAll(root, 0755); err != nil {
-		return nil, err
-	}
-	marker := filepath.Join(root, ZoneFile)
-	if _, err := os.Stat(marker); err == nil {
-		return nil, NewZoneError("%s already exists", marker)
-	}
-
-	if name == "" {
-		name = filepath.Base(root)
-	}
-
-	cfg := map[string]any{
-		"name":           name,
-		"default_server": "dev",
-		"vars": map[string]any{
-			"app_name": name,
-		},
-	}
-	cfgYAML, err := DumpYAML(cfg)
+	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(marker, []byte(cfgYAML), 0644); err != nil {
+	marker := filepath.Join(absRoot, ZoneFile)
+	if _, err := os.Stat(marker); err == nil {
+		return nil, NewZoneError("%s already exists", marker)
+	}
+	if parentZone, _ := FindOrNone(filepath.Dir(absRoot)); parentZone != nil {
+		return nil, NewZoneError("cannot initialize a nested zone inside existing zone '%s' (%s)", parentZone.Name(), parentZone.Root)
+	}
+
+	z, err := InitWizard(WizardOptions{
+		Dir:           absRoot,
+		Name:          name,
+		BaseURL:       "http://127.0.0.1:8000",
+		PrimaryServer: "local",
+	})
+	if err != nil {
 		return nil, err
 	}
 
-	serverDir := filepath.Join(root, "servers")
-	_ = os.MkdirAll(serverDir, 0755)
+	// Also provide dev.yaml and collections/example/01-get.yaml for backwards compatibility
+	serverDir := filepath.Join(absRoot, "servers")
 	devYAML, _ := DumpYAML(map[string]any{
 		"base_url": "https://httpbin.org",
 		"vars": map[string]any{
@@ -579,7 +625,7 @@ func Init(root string, name string) (*Zone, error) {
 	})
 	_ = os.WriteFile(filepath.Join(serverDir, "dev.yaml"), []byte(devYAML), 0644)
 
-	exDir := filepath.Join(root, "collections", "example")
+	exDir := filepath.Join(absRoot, "collections", "example")
 	_ = os.MkdirAll(exDir, 0755)
 	defYAML, _ := DumpYAML(map[string]any{
 		"headers": map[string]any{
@@ -605,15 +651,5 @@ func Init(root string, name string) (*Zone, error) {
 	})
 	_ = os.WriteFile(filepath.Join(exDir, "01-get.yaml"), []byte(getReq), 0644)
 
-	_ = os.MkdirAll(filepath.Join(root, "chains"), 0755)
-
-	gi := filepath.Join(root, ".gitignore")
-	if _, err := os.Stat(gi); os.IsNotExist(err) {
-		_ = os.WriteFile(gi, []byte(".hit/\n*.secrets.yaml\n*.secrets.yml\n"), 0644)
-	}
-
-	return &Zone{
-		Root:   root,
-		Config: cfg,
-	}, nil
+	return z, nil
 }

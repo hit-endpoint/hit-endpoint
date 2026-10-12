@@ -23,6 +23,19 @@ type Mutation struct {
 func GenerateMutations(method, rawURL string, headers map[string]string, query map[string]string, body []byte, categories []string) []Mutation {
 	var results []Mutation
 
+	mergedQuery := make(map[string]string)
+	if u, err := url.Parse(rawURL); err == nil {
+		for k, vals := range u.Query() {
+			if len(vals) > 0 {
+				mergedQuery[k] = vals[0]
+			}
+		}
+	}
+	for k, v := range query {
+		mergedQuery[k] = v
+	}
+	query = mergedQuery
+
 	catMap := make(map[string]bool)
 	for _, c := range categories {
 		catMap[strings.ToLower(strings.TrimSpace(c))] = true
@@ -50,7 +63,7 @@ func GenerateMutations(method, rawURL string, headers map[string]string, query m
 
 	// 3. Extreme String & Buffer Overflow Mutations
 	if allCats || catMap["strings"] {
-		results = append(results, generateStringMutations(method, rawURL, headers, jsonBody, isJSON)...)
+		results = append(results, generateStringMutations(method, rawURL, headers, query, body, jsonBody, isJSON)...)
 	}
 
 	// 4. Injection Probes (SQLi, XSS, Path Traversal, Command Injection)
@@ -198,7 +211,15 @@ func generateTypeMutations(method, rawURL string, headers map[string]string, jso
 	return mutations
 }
 
-func generateStringMutations(method, rawURL string, headers map[string]string, jsonBody any, isJSON bool) []Mutation {
+func isBodilessMethod(method string, body []byte) bool {
+	if len(body) > 0 {
+		return false
+	}
+	m := strings.ToUpper(strings.TrimSpace(method))
+	return m == "GET" || m == "DELETE" || m == "HEAD" || m == "OPTIONS"
+}
+
+func generateStringMutations(method, rawURL string, headers map[string]string, query map[string]string, body []byte, jsonBody any, isJSON bool) []Mutation {
 	var mutations []Mutation
 
 	stringPayloads := []struct {
@@ -233,6 +254,32 @@ func generateStringMutations(method, rawURL string, headers map[string]string, j
 					}
 					break
 				}
+			}
+		}
+	} else if isBodilessMethod(method, body) {
+		targetParam := "q"
+		if len(query) > 0 {
+			var qKeys []string
+			for k := range query {
+				qKeys = append(qKeys, k)
+			}
+			sort.Strings(qKeys)
+			targetParam = qKeys[0]
+		}
+		for _, sp := range stringPayloads {
+			if u, err := url.Parse(rawURL); err == nil {
+				q := u.Query()
+				q.Set(targetParam, sp.val)
+				u.RawQuery = q.Encode()
+				mutations = append(mutations, Mutation{
+					Category:    "strings",
+					Name:        fmt.Sprintf("Query string ?%s: %s", targetParam, sp.name),
+					Description: fmt.Sprintf("Tests query string resilience with extreme input on ?%s", targetParam),
+					Method:      method,
+					URL:         u.String(),
+					Headers:     cloneHeaders(headers),
+					Body:        nil,
+				})
 			}
 		}
 	} else {
@@ -290,14 +337,17 @@ func generateInjectionMutations(method, rawURL string, headers map[string]string
 		}
 	}
 
-	// 2. In Query parameters
-	if len(query) > 0 {
-		var qKeys []string
-		for k := range query {
-			qKeys = append(qKeys, k)
+	// 2. In Query parameters (or synthesized query/path for bodiless requests)
+	if len(query) > 0 || !isJSON {
+		targetKey := "id"
+		if len(query) > 0 {
+			var qKeys []string
+			for k := range query {
+				qKeys = append(qKeys, k)
+			}
+			sort.Strings(qKeys)
+			targetKey = qKeys[0]
 		}
-		sort.Strings(qKeys)
-		targetKey := qKeys[0]
 
 		for _, inj := range injections {
 			mutatedQ := make(map[string]string, len(query))

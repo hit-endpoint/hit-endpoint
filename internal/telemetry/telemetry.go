@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	DefaultCloudURL     = "https://api.hitendpoint.com"
-	DefaultDashboardURL = "https://app.hitendpoint.com"
+	DefaultCloudURL     = ""
+	DefaultDashboardURL = ""
 )
 
 // PublishConfig controls the cloud telemetry publishing parameters.
@@ -140,9 +140,14 @@ func DetectGitContext(dir string) GitContext {
 		return ctx
 	}
 
-	// 2. Try git CLI if in git worktree
+	// 2. Try git CLI only if inside a git worktree
 	if dir == "" {
 		dir, _ = os.Getwd()
+	}
+
+	checkCmd := exec.Command("git", "-C", dir, "rev-parse", "--is-inside-work-tree")
+	if out, err := checkCmd.Output(); err != nil || strings.TrimSpace(string(out)) != "true" {
+		return ctx
 	}
 
 	commitCmd := exec.Command("git", "-C", dir, "rev-parse", "--short", "HEAD")
@@ -155,9 +160,14 @@ func DetectGitContext(dir string) GitContext {
 		ctx.Branch = strings.TrimSpace(string(out))
 	}
 
-	authorCmd := exec.Command("git", "-C", dir, "config", "user.email")
-	if out, err := authorCmd.Output(); err == nil {
-		ctx.Author = strings.TrimSpace(string(out))
+	// Never read global git user.email to avoid leaking personal emails
+	if owner := os.Getenv("HIT_NODE_OWNER"); owner != "" {
+		ctx.Author = owner
+	} else {
+		authorCmd := exec.Command("git", "-C", dir, "config", "--local", "user.name")
+		if out, err := authorCmd.Output(); err == nil {
+			ctx.Author = strings.TrimSpace(string(out))
+		}
 	}
 
 	diffCmd := exec.Command("git", "-C", dir, "status", "--porcelain")
@@ -241,6 +251,8 @@ func DetectNodeContext(git GitContext, ci CIContext) NodeContext {
 				nodeOwner = git.Author
 			} else if u := os.Getenv("USER"); u != "" {
 				nodeOwner = u
+			} else if u := os.Getenv("USERNAME"); u != "" {
+				nodeOwner = u
 			} else {
 				nodeOwner = "local-developer"
 			}
@@ -269,9 +281,13 @@ func BuildTelemetryPayload(results []*types.Result, flowErrors []string, z *zone
 	runID := GenerateRunID()
 	zoneName := ""
 	rootPath := ""
+	projectID := os.Getenv("HIT_PROJECT_ID")
 	if z != nil {
 		zoneName = z.Name()
 		rootPath = z.Root
+		if projectID == "" {
+			projectID = z.CloudConfig().ProjectID
+		}
 	}
 
 	if maskFn == nil {
@@ -285,6 +301,7 @@ func BuildTelemetryPayload(results []*types.Result, flowErrors []string, z *zone
 	payload := &RunTelemetryPayload{
 		Version:     "1.0",
 		RunID:       runID,
+		ProjectID:   projectID,
 		Timestamp:   time.Now().UTC().Format(time.RFC3339),
 		Zone:        zoneName,
 		Server:      serverName,
@@ -371,11 +388,15 @@ func PublishRun(ctx context.Context, client *http.Client, cfg PublishConfig, pay
 		client = &http.Client{Timeout: 5 * time.Second}
 	}
 
-	cloudURL := cfg.CloudURL
+	cloudURL := strings.TrimSpace(cfg.CloudURL)
 	if cloudURL == "" {
-		cloudURL = DefaultCloudURL
+		return nil, fmt.Errorf("no telemetry endpoint configured (set cloud.endpoint in zone.yaml, pass --publish=<url>, or set HIT_CLOUD_URL)")
 	}
 	cloudURL = strings.TrimRight(cloudURL, "/")
+
+	if payload.ProjectID == "" && cfg.ProjectID != "" {
+		payload.ProjectID = cfg.ProjectID
+	}
 
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -400,8 +421,8 @@ func PublishRun(ctx context.Context, client *http.Client, cfg PublishConfig, pay
 	if cfg.APIKey != "" {
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", cfg.APIKey))
 	}
-	if cfg.ProjectID != "" {
-		req.Header.Set("X-Hit-Project", cfg.ProjectID)
+	if payload.ProjectID != "" {
+		req.Header.Set("X-Hit-Project", payload.ProjectID)
 	}
 
 	resp, err := client.Do(req)
@@ -419,7 +440,7 @@ func PublishRun(ctx context.Context, client *http.Client, cfg PublishConfig, pay
 	bodyBytes, _ := io.ReadAll(resp.Body)
 	if err := json.Unmarshal(bodyBytes, &res); err != nil || res.DashboardURL == "" {
 		res.RunID = payload.RunID
-		res.DashboardURL = fmt.Sprintf("%s/runs/%s", DefaultDashboardURL, payload.RunID)
+		res.DashboardURL = fmt.Sprintf("%s/#/run/%s", cloudURL, payload.RunID)
 		res.Status = "received"
 	}
 

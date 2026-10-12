@@ -2,9 +2,6 @@ package perf
 
 import (
 	"context"
-	"encoding/csv"
-	"fmt"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -57,14 +54,14 @@ func RunFlowPerf(session *runner.Session, flowRef string, flowData map[string]an
 	oneFlowCall := func(record bool) {
 		workerSess := session.Clone()
 		t0 := time.Now()
-		fr := flows.RunFlow(workerSess, flowData, nil, nil, true, 0)
+		fr := flows.RunFlow(workerSess, flowData, nil, nil, opts.Check, 0)
 		ms := float64(time.Since(t0).Nanoseconds()) / 1e6
 		if !record {
 			return
 		}
 
 		offset := float64(time.Since(start).Nanoseconds()) / 1e9
-		good := fr.OK()
+		good := fr.Error == ""
 
 		mu.Lock()
 		report.Completed++
@@ -75,15 +72,17 @@ func RunFlowPerf(session *runner.Session, flowRef string, flowData map[string]an
 			report.BytesReceived += r.Size
 			if r.Error != "" {
 				report.Errors[r.Error]++
+				good = false
 			} else if r.HasStatus {
 				report.StatusCounts[r.Status]++
+				if r.Status >= 400 && (!opts.Check || len(r.Tests) == 0) {
+					good = false
+				}
 			}
 			if opts.Check {
-				for _, t := range r.Tests {
-					if !t.Passed {
-						good = false
-						report.TestFailures[t.Name]++
-					}
+				for _, t := range r.FailedTests() {
+					good = false
+					report.TestFailures[t.Name]++
 				}
 			}
 		}
@@ -206,20 +205,8 @@ func RunFlowPerf(session *runner.Session, flowRef string, flowData map[string]an
 	report.DurationS = time.Since(start).Seconds()
 
 	if opts.CsvPath != "" {
-		f, err := os.Create(opts.CsvPath)
-		if err == nil {
-			defer f.Close()
-			w := csv.NewWriter(f)
-			_ = w.Write([]string{"offset_s", "status", "latency_ms", "error"})
-			for _, r := range csvRows {
-				_ = w.Write([]string{
-					fmt.Sprintf("%.4f", r.offset),
-					r.status,
-					fmt.Sprintf("%.2f", r.latency),
-					r.err,
-				})
-			}
-			w.Flush()
+		if err := writeCSVFile(opts.CsvPath, csvRows); err != nil {
+			return report, err
 		}
 	}
 

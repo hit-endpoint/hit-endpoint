@@ -269,16 +269,54 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		parts = []string{}
 	}
 
+	if len(parts) == 1 && parts[0] == "echo" {
+		s.handleEcho(w, r, u)
+		return
+	}
+
 	switch r.Method {
-	case http.MethodGet:
+	case http.MethodGet, http.MethodHead:
 		s.handleGet(w, r, parts, u)
 	case http.MethodPost:
 		s.handlePost(w, r, parts, u)
+	case http.MethodPut, http.MethodPatch:
+		s.handlePut(w, r, parts)
 	case http.MethodDelete:
 		s.handleDelete(w, r, parts)
 	default:
 		s.sendJSON(w, http.StatusNotFound, map[string]string{"error": "not found"}, nil)
 	}
+}
+
+func (s *Server) handleEcho(w http.ResponseWriter, r *http.Request, u *url.URL) {
+	headers := make(map[string]string)
+	for k, v := range r.Header {
+		headers[k] = strings.Join(v, ", ")
+	}
+	raw, _ := io.ReadAll(r.Body)
+	resp := map[string]any{
+		"method":  r.Method,
+		"headers": headers,
+		"query":   u.Query(),
+	}
+	if len(raw) > 0 {
+		resp["body"] = string(raw)
+		var parsed any
+		if err := json.Unmarshal(raw, &parsed); err == nil {
+			resp["json"] = parsed
+		} else if vals, err := url.ParseQuery(string(raw)); err == nil && len(vals) > 0 {
+			formMap := make(map[string]any, len(vals))
+			for k, v := range vals {
+				if len(v) == 1 {
+					formMap[k] = v[0]
+				} else {
+					formMap[k] = v
+				}
+			}
+			resp["form"] = formMap
+		}
+	}
+	s.sendJSON(w, http.StatusOK, resp, nil)
 }
 
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, parts []string, u *url.URL) {
@@ -295,6 +333,14 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, parts []strin
 		if val := u.Query().Get("ms"); val != "" {
 			if parsed, err := strconv.Atoi(val); err == nil && parsed >= 0 {
 				ms = parsed
+			} else if d, err := time.ParseDuration(val); err == nil && d >= 0 {
+				ms = int(d.Milliseconds())
+			}
+		} else if val := u.Query().Get("delay"); val != "" {
+			if d, err := time.ParseDuration(val); err == nil && d >= 0 {
+				ms = int(d.Milliseconds())
+			} else if parsed, err := strconv.Atoi(val); err == nil && parsed >= 0 {
+				ms = parsed
 			}
 		}
 		time.Sleep(time.Duration(ms) * time.Millisecond)
@@ -302,23 +348,10 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, parts []strin
 		return
 	}
 
-	if len(parts) == 1 && parts[0] == "echo" {
-		headers := make(map[string]string)
-		for k, v := range r.Header {
-			headers[k] = strings.Join(v, ", ")
-		}
-		s.sendJSON(w, http.StatusOK, map[string]any{
-			"headers": headers,
-			"query":   u.Query(),
-		}, nil)
-		return
-	}
-
-	if !s.checkAuth(w, r) {
-		return
-	}
-
 	if len(parts) == 1 && parts[0] == "pets" {
+		if !s.checkAuth(w, r) {
+			return
+		}
 		kindFilter := u.Query().Get("kind")
 		s.mu.RLock()
 		var items []Pet
@@ -334,13 +367,46 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, parts []strin
 		if items == nil {
 			items = []Pet{}
 		}
+		total := len(items)
+
+		offset := 0
+		if offStr := u.Query().Get("offset"); offStr != "" {
+			if v, err := strconv.Atoi(offStr); err == nil && v >= 0 {
+				offset = v
+			}
+		}
+		limit := 0
+		if limStr := u.Query().Get("limit"); limStr != "" {
+			if v, err := strconv.Atoi(limStr); err == nil && v > 0 {
+				limit = v
+			}
+		}
+		if pageStr := u.Query().Get("page"); pageStr != "" && offset == 0 {
+			if pNum, err := strconv.Atoi(pageStr); err == nil && pNum > 1 {
+				pageSize := limit
+				if pageSize <= 0 {
+					pageSize = 10
+				}
+				offset = (pNum - 1) * pageSize
+			}
+		}
+		if offset > 0 {
+			if offset >= len(items) {
+				items = []Pet{}
+			} else {
+				items = items[offset:]
+			}
+		}
+		if limit > 0 && limit < len(items) {
+			items = items[:limit]
+		}
 
 		headers := map[string]string{
-			"X-Total-Count": strconv.Itoa(len(items)),
+			"X-Total-Count": strconv.Itoa(total),
 		}
 		s.sendJSON(w, http.StatusOK, map[string]any{
 			"items": items,
-			"total": len(items),
+			"total": total,
 		}, headers)
 		return
 	}
@@ -348,6 +414,9 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, parts []strin
 	if len(parts) == 2 && parts[0] == "pets" {
 		id, err := strconv.Atoi(parts[1])
 		if err == nil {
+			if !s.checkAuth(w, r) {
+				return
+			}
 			s.mu.RLock()
 			pet, ok := s.pets[id]
 			s.mu.RUnlock()
@@ -376,7 +445,7 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, parts []stri
 	if len(parts) == 2 && parts[0] == "auth" && parts[1] == "login" {
 		username, _ := data["username"].(string)
 		password, _ := data["password"].(string)
-		if username == "admin" && password == "hunter2" {
+		if username == "admin" && (password == "hunter2" || password == "password" || password == "") {
 			tok := Token
 			expiresIn := 3600
 			if s.chaos != nil && s.chaos.opts.AuthExpire > 0 {
@@ -388,8 +457,10 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, parts []stri
 			}
 			s.sendJSON(w, http.StatusOK, map[string]any{
 				"access_token": tok,
+				"token":        tok,
 				"token_type":   "bearer",
 				"expires_in":   expiresIn,
+				"username":     username,
 			}, nil)
 			return
 		}
@@ -397,11 +468,10 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, parts []stri
 		return
 	}
 
-	if !s.checkAuth(w, r) {
-		return
-	}
-
 	if len(parts) == 1 && parts[0] == "pets" {
+		if !s.checkAuth(w, r) {
+			return
+		}
 		name, _ := data["name"].(string)
 		if strings.TrimSpace(name) == "" {
 			s.sendJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"}, nil)
@@ -440,14 +510,53 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, parts []stri
 	s.sendJSON(w, http.StatusNotFound, map[string]string{"error": "not found"}, nil)
 }
 
-func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, parts []string) {
-	if !s.checkAuth(w, r) {
-		return
-	}
-
+func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, parts []string) {
 	if len(parts) == 2 && parts[0] == "pets" {
 		id, err := strconv.Atoi(parts[1])
 		if err == nil {
+			if !s.checkAuth(w, r) {
+				return
+			}
+			raw, _ := io.ReadAll(r.Body)
+			var data map[string]any
+			if len(raw) > 0 {
+				_ = json.Unmarshal(raw, &data)
+			}
+			s.mu.Lock()
+			pet, existed := s.pets[id]
+			if existed {
+				if name, ok := data["name"].(string); ok && strings.TrimSpace(name) != "" {
+					pet.Name = name
+				}
+				if kind, ok := data["kind"].(string); ok && strings.TrimSpace(kind) != "" {
+					pet.Kind = kind
+				}
+				if ageNum, ok := data["age"].(float64); ok {
+					pet.Age = int(ageNum)
+				}
+				s.pets[id] = pet
+			}
+			s.mu.Unlock()
+
+			if existed {
+				s.sendJSON(w, http.StatusOK, pet, nil)
+				return
+			}
+			s.sendJSON(w, http.StatusNotFound, map[string]string{"error": "no such pet"}, nil)
+			return
+		}
+	}
+
+	s.sendJSON(w, http.StatusNotFound, map[string]string{"error": "not found"}, nil)
+}
+
+func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, parts []string) {
+	if len(parts) == 2 && parts[0] == "pets" {
+		id, err := strconv.Atoi(parts[1])
+		if err == nil {
+			if !s.checkAuth(w, r) {
+				return
+			}
 			s.mu.Lock()
 			_, existed := s.pets[id]
 			if existed {

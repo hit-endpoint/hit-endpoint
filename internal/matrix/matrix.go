@@ -83,8 +83,34 @@ func parseRowList(list []any) ([]Row, error) {
 
 func loadMatrixFile(relOrAbsPath, baseDir string) ([]Row, error) {
 	filePath := relOrAbsPath
-	if !filepath.IsAbs(filePath) && baseDir != "" {
-		filePath = filepath.Join(baseDir, filePath)
+	if !filepath.IsAbs(filePath) {
+		var candidates []string
+		if baseDir != "" {
+			candidates = append(candidates, filepath.Join(baseDir, filePath))
+			// Also walk up from baseDir looking for zone root (zone.yaml)
+			dir := baseDir
+			for {
+				if _, err := os.Stat(filepath.Join(dir, "zone.yaml")); err == nil {
+					candidates = append(candidates, filepath.Join(dir, filePath))
+					break
+				}
+				parent := filepath.Dir(dir)
+				if parent == dir {
+					break
+				}
+				dir = parent
+			}
+		}
+		candidates = append(candidates, filePath)
+		for _, c := range candidates {
+			if st, err := os.Stat(c); err == nil && !st.IsDir() {
+				filePath = c
+				break
+			}
+		}
+		if filePath == relOrAbsPath && baseDir != "" {
+			filePath = filepath.Join(baseDir, relOrAbsPath)
+		}
 	}
 
 	data, err := os.ReadFile(filePath)
@@ -163,11 +189,10 @@ func ExpandSpec(base *spec.RequestSpec, row Row, index int) *spec.RequestSpec {
 	// Set row context
 	cloned.Vars["row"] = row
 
-	// Also promote row keys directly into vars for convenient {{key}} interpolation
+	// Promote row keys directly into vars for both {{key}} and {{row.key}} interpolation
 	for k, v := range row {
-		if _, exists := cloned.Vars[k]; !exists {
-			cloned.Vars[k] = v
-		}
+		cloned.Vars[k] = v
+		cloned.Vars["row."+k] = v
 	}
 
 	// Format row description

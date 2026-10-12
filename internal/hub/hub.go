@@ -81,6 +81,8 @@ func NewServer(cfg Config) (*Server, error) {
 	mux.HandleFunc("/api/v1/fleet/workers", s.handleGetFleetWorkers)
 	mux.HandleFunc("/api/v1/dispatch", s.handleDispatchRoute)
 	mux.HandleFunc("/api/v1/dispatch/", s.handleDispatchItemRoute)
+	mux.HandleFunc("/api/v1/probes", s.handleProbesRoute)
+	mux.HandleFunc("/api/v1/incidents", s.handleIncidentsRoute)
 	mux.HandleFunc("/api/v1/summary", s.handleGetSummary)
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/", s.handleUI)
@@ -160,13 +162,31 @@ func (s *Server) authenticate(r *http.Request) bool {
 	}
 	auth := r.Header.Get("Authorization")
 	if strings.HasPrefix(auth, "Bearer ") {
-		token := strings.TrimPrefix(auth, "Bearer ")
-		return token == s.cfg.APIKey
+		token := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+		if token == s.cfg.APIKey {
+			return true
+		}
+	}
+	if apiKey := strings.TrimSpace(r.Header.Get("X-API-Key")); apiKey != "" && apiKey == s.cfg.APIKey {
+		return true
+	}
+	if qKey := strings.TrimSpace(r.URL.Query().Get("api_key")); qKey != "" && qKey == s.cfg.APIKey {
+		return true
+	}
+	if qToken := strings.TrimSpace(r.URL.Query().Get("token")); qToken != "" && qToken == s.cfg.APIKey {
+		return true
+	}
+	if c, err := r.Cookie("hit_api_key"); err == nil && c.Value == s.cfg.APIKey {
+		return true
 	}
 	return false
 }
 
 func (s *Server) handleRunsRoute(w http.ResponseWriter, r *http.Request) {
+	if !s.authenticate(r) {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
 	switch r.Method {
 	case http.MethodPost:
 		s.handleIngest(w, r)
@@ -189,8 +209,21 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(payload.Endpoints) == 0 && payload.Summary.Total == 0 {
+		http.Error(w, `{"error":"invalid run payload: endpoints or summary.total required"}`, http.StatusBadRequest)
+		return
+	}
+
 	if payload.RunID == "" {
 		payload.RunID = telemetry.GenerateRunID()
+	}
+
+	if payload.ProjectID == "" {
+		if hdrProj := strings.TrimSpace(r.Header.Get("X-Hit-Project")); hdrProj != "" {
+			payload.ProjectID = hdrProj
+		} else if s.cfg.ProjectID != "" {
+			payload.ProjectID = s.cfg.ProjectID
+		}
 	}
 
 	// Update or assign node identity defaults if missing
@@ -207,6 +240,7 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 
 	resp := map[string]any{
 		"run_id":        payload.RunID,
+		"project_id":    payload.ProjectID,
 		"dashboard_url": dashboardURL,
 		"status":        "ingested",
 		"node":          payload.Node,
@@ -218,6 +252,10 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
+	if !s.authenticate(r) {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	offset, _ := strconv.Atoi(q.Get("offset"))
@@ -246,6 +284,10 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
+	if !s.authenticate(r) {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
 	path := r.URL.Path
 	runID := ""
 	if strings.HasPrefix(path, "/api/v1/runs/") {
@@ -270,6 +312,10 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
+	if !s.authenticate(r) {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
 	nodes := s.store.ListNodes()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
@@ -279,6 +325,10 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetSummary(w http.ResponseWriter, r *http.Request) {
+	if !s.authenticate(r) {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
 	summary := s.store.GetSummary()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(summary)
@@ -291,6 +341,20 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" && r.URL.Path != "/index.html" {
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/v1/") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"error":"not found"}`))
+			return
+		}
+		http.NotFound(w, r)
+		return
+	}
+	if !s.authenticate(r) {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
 	html := RenderDashboard(DashboardOptions{
 		Title:      s.cfg.DashboardTitle,
 		LogoURL:    s.cfg.LogoURL,
@@ -330,6 +394,10 @@ func (s *Server) handleNodeRegister(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleNodeRoute(w http.ResponseWriter, r *http.Request) {
+	if !s.authenticate(r) {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/nodes/")
 	parts := strings.Split(path, "/")
 	if len(parts) == 0 || parts[0] == "" {
@@ -437,6 +505,9 @@ func (s *Server) handleNodeRoute(w http.ResponseWriter, r *http.Request) {
 					telemetryRunID = telemetry.GenerateRunID()
 					compReq.Telemetry.RunID = telemetryRunID
 				}
+				if compReq.Telemetry.ProjectID == "" && s.cfg.ProjectID != "" {
+					compReq.Telemetry.ProjectID = s.cfg.ProjectID
+				}
 				_ = s.store.SaveRun(compReq.Telemetry)
 			}
 			_ = s.store.CompleteJob(jobID, compReq.State, compReq.Result, compReq.Error, telemetryRunID)
@@ -461,17 +532,36 @@ func (s *Server) handleNodeRoute(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetFleet(w http.ResponseWriter, r *http.Request) {
+	if !s.authenticate(r) {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
 	topo := s.store.GetFleetTopology()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(topo)
 }
 
 func (s *Server) handleGetFleetWorkers(w http.ResponseWriter, r *http.Request) {
-	filter := r.URL.Query().Get("capability")
+	if !s.authenticate(r) {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+	capFilter := r.URL.Query().Get("capability")
+	regFilter := r.URL.Query().Get("region")
+	filter := capFilter
 	if filter == "" {
-		filter = r.URL.Query().Get("region")
+		filter = regFilter
 	}
 	workers := s.store.GetAvailableWorkers(filter)
+	if capFilter != "" && regFilter != "" {
+		var filtered []*NodeRecord
+		for _, wNode := range workers {
+			if strings.EqualFold(wNode.Region, regFilter) {
+				filtered = append(filtered, wNode)
+			}
+		}
+		workers = filtered
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"workers": workers,
@@ -481,12 +571,12 @@ func (s *Server) handleGetFleetWorkers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDispatchRoute(w http.ResponseWriter, r *http.Request) {
+	if !s.authenticate(r) {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
 	switch r.Method {
 	case http.MethodPost:
-		if !s.authenticate(r) {
-			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-			return
-		}
 		var req DispatchRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":"invalid json: %s"}`, err.Error()), http.StatusBadRequest)
@@ -522,6 +612,10 @@ func (s *Server) handleDispatchRoute(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDispatchItemRoute(w http.ResponseWriter, r *http.Request) {
+	if !s.authenticate(r) {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/dispatch/")
 	parts := strings.Split(path, "/")
 	if len(parts) == 0 || parts[0] == "" {
@@ -538,10 +632,6 @@ func (s *Server) handleDispatchItemRoute(w http.ResponseWriter, r *http.Request)
 	if action == "cancel" {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if !s.authenticate(r) {
-			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 			return
 		}
 		if err := s.store.CancelJob(jobID); err != nil {
@@ -567,5 +657,70 @@ func (s *Server) handleDispatchItemRoute(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(job)
 }
+
+func (s *Server) handleProbesRoute(w http.ResponseWriter, r *http.Request) {
+	if !s.authenticate(r) {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+	switch r.Method {
+	case http.MethodPost:
+		var req ProbeRecord
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"invalid json: %s"}`, err.Error()), http.StatusBadRequest)
+			return
+		}
+		saved := s.store.RecordProbeCheck(req)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(saved)
+	case http.MethodGet:
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		if limit <= 0 {
+			limit = 50
+		}
+		probes := s.store.ListProbes(limit)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"probes": probes,
+			"total":  len(probes),
+		})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleIncidentsRoute(w http.ResponseWriter, r *http.Request) {
+	if !s.authenticate(r) {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+	switch r.Method {
+	case http.MethodPost:
+		var req IncidentRecord
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":"invalid json: %s"}`, err.Error()), http.StatusBadRequest)
+			return
+		}
+		saved := s.store.RecordIncident(req)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(saved)
+	case http.MethodGet:
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		if limit <= 0 {
+			limit = 50
+		}
+		incidents := s.store.ListIncidents(limit)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"incidents": incidents,
+			"total":     len(incidents),
+		})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 
 

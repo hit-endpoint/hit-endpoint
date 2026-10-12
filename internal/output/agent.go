@@ -9,8 +9,15 @@ import (
 )
 
 func PrintAgentResult(r *types.Result, w io.Writer) {
+	if len(r.Matrix) > 0 {
+		for _, mr := range r.Matrix {
+			PrintAgentResult(mr, w)
+		}
+		return
+	}
+
 	ref := r.Ref
-	if ref == "" {
+	if ref == "" || strings.Contains(r.Name, "[Row ") {
 		ref = r.Name
 	}
 
@@ -62,10 +69,22 @@ func PrintAgentResult(r *types.Result, w io.Writer) {
 }
 
 func PrintAgentSummary(results []*types.Result, w io.Writer) {
-	total := len(results)
+	total := 0
 	passed := 0
 	failed := 0
 	for _, r := range results {
+		if len(r.Matrix) > 0 {
+			for _, mr := range r.Matrix {
+				total++
+				if mr.OK() {
+					passed++
+				} else {
+					failed++
+				}
+			}
+			continue
+		}
+		total++
 		if r.OK() {
 			passed++
 		} else {
@@ -78,3 +97,4 @@ func PrintAgentSummary(results []*types.Result, w io.Writer) {
 		fmt.Fprintf(w, "SUMMARY: %d PASSED, %d FAILED (TOTAL %d)\n", passed, failed, total)
 	}
 }
+

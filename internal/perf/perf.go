@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,6 +32,62 @@ type csvRow struct {
 	status  string
 	latency float64
 	err     string
+}
+
+func writeCSVFile(csvPath string, rows []csvRow) error {
+	if dir := filepath.Dir(csvPath); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("failed to create directory for CSV %s: %w", csvPath, err)
+		}
+	}
+	f, err := os.Create(csvPath)
+	if err != nil {
+		return fmt.Errorf("failed to create CSV %s: %w", csvPath, err)
+	}
+	w := csv.NewWriter(f)
+	if err := w.Write([]string{"offset_s", "status", "latency_ms", "error"}); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("failed to write CSV header to %s: %w", csvPath, err)
+	}
+	for _, r := range rows {
+		if err := w.Write([]string{
+			fmt.Sprintf("%.4f", r.offset),
+			r.status,
+			fmt.Sprintf("%.2f", r.latency),
+			r.err,
+		}); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("failed to write CSV row to %s: %w", csvPath, err)
+		}
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("failed to flush CSV %s: %w", csvPath, err)
+	}
+	return f.Close()
+}
+
+// WriteReportCSV writes synthetic per-request rows from a PerfReport when per-worker rows are not available.
+func WriteReportCSV(csvPath string, report *types.PerfReport) error {
+	var rows []csvRow
+	statusStr := "200"
+	for code := range report.StatusCounts {
+		statusStr = fmt.Sprintf("%d", code)
+		break
+	}
+	for i, lat := range report.LatenciesMs {
+		offset := 0.0
+		if len(report.LatenciesMs) > 0 && report.DurationS > 0 {
+			offset = (float64(i+1) / float64(len(report.LatenciesMs))) * report.DurationS
+		}
+		rows = append(rows, csvRow{
+			offset:  offset,
+			status:  statusStr,
+			latency: lat,
+		})
+	}
+	return writeCSVFile(csvPath, rows)
 }
 
 func RunPerf(session *runner.Session, sp *spec.RequestSpec, opts PerfOptions) (*types.PerfReport, error) {
@@ -97,12 +154,15 @@ func RunPerf(session *runner.Session, sp *spec.RequestSpec, opts PerfOptions) (*
 			report.StatusCounts[r.Status]++
 		}
 
-		if opts.Check && len(rendered.Tests) > 0 {
-			for _, t := range r.Tests {
-				if !t.Passed {
-					good = false
+		if opts.Check {
+			failedTests := r.FailedTests()
+			if len(failedTests) > 0 {
+				good = false
+				for _, t := range failedTests {
 					report.TestFailures[t.Name]++
 				}
+			} else if len(r.Tests) > 0 && r.Error == "" {
+				good = true
 			}
 		}
 
@@ -215,20 +275,8 @@ func RunPerf(session *runner.Session, sp *spec.RequestSpec, opts PerfOptions) (*
 	report.DurationS = time.Since(start).Seconds()
 
 	if opts.CsvPath != "" {
-		f, err := os.Create(opts.CsvPath)
-		if err == nil {
-			defer f.Close()
-			w := csv.NewWriter(f)
-			_ = w.Write([]string{"offset_s", "status", "latency_ms", "error"})
-			for _, r := range csvRows {
-				_ = w.Write([]string{
-					fmt.Sprintf("%.4f", r.offset),
-					r.status,
-					fmt.Sprintf("%.2f", r.latency),
-					r.err,
-				})
-			}
-			w.Flush()
+		if err := writeCSVFile(opts.CsvPath, csvRows); err != nil {
+			return report, err
 		}
 	}
 

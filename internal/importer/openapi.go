@@ -109,6 +109,26 @@ func ImportOpenAPI(srcPath string, collectionsDir string, nameOverride string) (
 		_ = os.WriteFile(filepath.Join(destDir, zone.DefaultsFile), []byte(dYAML), 0644)
 	}
 
+	// Scaffold a server file in servers/<slug>.yaml if importing inside a Zone
+	zoneRoot := filepath.Dir(collectionsDir)
+	if _, zErr := os.Stat(filepath.Join(zoneRoot, zone.ZoneFile)); zErr == nil {
+		serversDir := filepath.Join(zoneRoot, "servers")
+		_ = os.MkdirAll(serversDir, 0755)
+		srvBaseURL := strings.TrimRight(baseURL, "/")
+		if srvBaseURL == "" {
+			srvBaseURL = "http://127.0.0.1:8765"
+		}
+		srvFile := filepath.Join(serversDir, collSlug+".yaml")
+		if _, sErr := os.Stat(srvFile); os.IsNotExist(sErr) {
+			srvYAML, sDumpErr := zone.DumpYAML(map[string]any{
+				"base_url": srvBaseURL,
+			})
+			if sDumpErr == nil {
+				_ = os.WriteFile(srvFile, []byte(srvYAML), 0644)
+			}
+		}
+	}
+
 	// 3. Process paths
 	paths, ok := doc["paths"].(map[string]any)
 	if !ok {
@@ -245,6 +265,20 @@ func ImportOpenAPI(srcPath string, collectionsDir string, nameOverride string) (
 				}
 			}
 
+			// Ensure any {param} in pathStr has a default value even if omitted from parameters:
+			for _, m := range pathParamRegex.FindAllStringSubmatch(pathStr, -1) {
+				if len(m) > 1 {
+					pName := m[1]
+					if _, exists := pathVars[pName]; !exists {
+						if strings.EqualFold(pName, "id") || strings.HasSuffix(strings.ToLower(pName), "id") {
+							pathVars[pName] = 1
+						} else {
+							pathVars[pName] = "example"
+						}
+					}
+				}
+			}
+
 			if len(pathVars) > 0 {
 				reqSpec["vars"] = pathVars
 			}
@@ -278,6 +312,33 @@ func ImportOpenAPI(srcPath string, collectionsDir string, nameOverride string) (
 						if mm, ok := multiSample.(map[string]any); ok {
 							reqSpec["body"] = map[string]any{"multipart": mm}
 						}
+					}
+				}
+			}
+
+			// Fallback request body for POST/PUT/PATCH when spec omits requestBody schema
+			if reqSpec["body"] == nil && (method == "post" || method == "put" || method == "patch") {
+				lowerPath := strings.ToLower(pathStr)
+				if strings.Contains(lowerPath, "login") || strings.Contains(lowerPath, "auth") {
+					reqSpec["body"] = map[string]any{
+						"json": map[string]any{
+							"username": "admin",
+							"password": "hunter2",
+						},
+					}
+				} else if strings.Contains(lowerPath, "pet") {
+					reqSpec["body"] = map[string]any{
+						"json": map[string]any{
+							"name": "Buddy",
+							"kind": "dog",
+							"age":  2,
+						},
+					}
+				} else {
+					reqSpec["body"] = map[string]any{
+						"json": map[string]any{
+							"name": "example",
+						},
 					}
 				}
 			}
@@ -346,6 +407,11 @@ func ImportOpenAPI(srcPath string, collectionsDir string, nameOverride string) (
 									if _, hasProp := props[candidate]; hasProp {
 										capName := fileSlug + "_" + candidate
 										captures[capName] = "json." + candidate
+										if candidate == "id" {
+											captures["id"] = "json.id"
+										} else if candidate == "token" || candidate == "access_token" {
+											captures["token"] = "json." + candidate
+										}
 										report.CapturesConverted++
 										break
 									}
@@ -353,6 +419,18 @@ func ImportOpenAPI(srcPath string, collectionsDir string, nameOverride string) (
 							}
 						}
 					}
+				}
+			}
+
+			// Fallback captures for POST operations when response schema was omitted
+			if len(captures) == 0 && method == "post" {
+				lowerPath := strings.ToLower(pathStr)
+				if strings.Contains(lowerPath, "login") || strings.Contains(lowerPath, "auth") {
+					captures["token"] = "json.access_token"
+					report.CapturesConverted++
+				} else if !strings.Contains(pathStr, "{") {
+					captures["id"] = "json.id"
+					report.CapturesConverted++
 				}
 			}
 

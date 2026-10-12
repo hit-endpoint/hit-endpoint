@@ -56,12 +56,20 @@ type Violation struct {
 
 // PolicyReport represents the aggregated results of a policy audit.
 type PolicyReport struct {
-	ZoneRoot   string      `json:"zone_root"`
-	Scope      string      `json:"scope"`
-	TotalFiles int         `json:"total_files"`
-	Passed     bool        `json:"passed"`
-	Violations []Violation `json:"violations"`
-	AuditTime  string      `json:"audit_time"`
+	ZoneRoot     string      `json:"zone_root"`
+	Scope        string      `json:"scope"`
+	TotalFiles   int         `json:"total_files"`
+	Passed       bool        `json:"passed"`
+	Violations   []Violation `json:"violations"`
+	AuditTime    string      `json:"audit_time"`
+	checkedFiles []string
+}
+
+// ApplyStrict marks the report as failed if strict mode is enabled and any violations exist.
+func (r *PolicyReport) ApplyStrict(strict bool) {
+	if strict && len(r.Violations) > 0 {
+		r.Passed = false
+	}
 }
 
 // DefaultPolicy provides sensible default governance rules.
@@ -78,10 +86,10 @@ func DefaultPolicy() *PolicyConfig {
 // LoadPolicy discovers and parses policy definitions from a zone.
 func LoadPolicy(zoneRoot string) (*PolicyConfig, error) {
 	candidates := []string{
-		filepath.Join(zoneRoot, ".hit", "policy.yaml"),
-		filepath.Join(zoneRoot, ".hit", "policy.yml"),
 		filepath.Join(zoneRoot, "policy.yaml"),
 		filepath.Join(zoneRoot, "policy.yml"),
+		filepath.Join(zoneRoot, ".hit", "policy.yaml"),
+		filepath.Join(zoneRoot, ".hit", "policy.yml"),
 	}
 
 	for _, c := range candidates {
@@ -99,11 +107,14 @@ func LoadPolicy(zoneRoot string) (*PolicyConfig, error) {
 	if fi, err := os.Stat(zoneConfigFile); err == nil && !fi.IsDir() {
 		data, err := os.ReadFile(zoneConfigFile)
 		if err == nil {
-			var wrapper struct {
-				Policy *rawPolicyConfig `yaml:"policy"`
-			}
-			if err := yaml.Unmarshal(data, &wrapper); err == nil && wrapper.Policy != nil {
-				return convertRawPolicy(wrapper.Policy)
+			var zoneMap map[string]any
+			if err := yaml.Unmarshal(data, &zoneMap); err == nil {
+				if polRaw, ok := zoneMap["policy"]; ok && polRaw != nil {
+					polBytes, err := yaml.Marshal(polRaw)
+					if err == nil {
+						return ParsePolicyYAML(polBytes)
+					}
+				}
 			}
 		}
 	}
@@ -112,20 +123,55 @@ func LoadPolicy(zoneRoot string) (*PolicyConfig, error) {
 	return DefaultPolicy(), nil
 }
 
+type policyFileEnvelope struct {
+	Version                  any              `yaml:"version"`
+	Rules                    *rawPolicyConfig `yaml:"rules"`
+	Policy                   *rawPolicyConfig `yaml:"policy"`
+	RequireAssertions        []string         `yaml:"require_assertions"`
+	MaxLatency               any              `yaml:"max_latency"`
+	RequireAuth              bool             `yaml:"require_auth"`
+	DisallowInsecureTLS      bool             `yaml:"disallow_insecure_tls"`
+	DisallowHardcodedSecrets bool             `yaml:"disallow_hardcoded_secrets"`
+	RequireDescription       bool             `yaml:"require_description"`
+}
+
 // ParsePolicyYAML parses raw YAML bytes into a PolicyConfig.
+// It supports both top-level keys and the documented `rules:` (or `policy:`) wrapper,
+// and fails loudly on unrecognized keys.
 func ParsePolicyYAML(data []byte) (*PolicyConfig, error) {
-	var raw rawPolicyConfig
-	if err := yaml.Unmarshal(data, &raw); err != nil {
-		// Also try parsing wrapped under `policy:`
-		var wrapper struct {
-			Policy rawPolicyConfig `yaml:"policy"`
-		}
-		if err2 := yaml.Unmarshal(data, &wrapper); err2 == nil && len(wrapper.Policy.RequireAssertions) > 0 {
-			return convertRawPolicy(&wrapper.Policy)
-		}
+	if strings.TrimSpace(string(data)) == "" {
+		return DefaultPolicy(), nil
+	}
+
+	dec := yaml.NewDecoder(strings.NewReader(string(data)))
+	dec.KnownFields(true)
+
+	var env policyFileEnvelope
+	if err := dec.Decode(&env); err != nil {
 		return nil, fmt.Errorf("invalid policy YAML format: %w", err)
 	}
-	return convertRawPolicy(&raw)
+
+	var active rawPolicyConfig
+	if env.Rules != nil {
+		active = *env.Rules
+	} else if env.Policy != nil {
+		active = *env.Policy
+	} else {
+		active = rawPolicyConfig{
+			RequireAssertions:        env.RequireAssertions,
+			MaxLatency:               env.MaxLatency,
+			RequireAuth:              env.RequireAuth,
+			DisallowInsecureTLS:      env.DisallowInsecureTLS,
+			DisallowHardcodedSecrets: env.DisallowHardcodedSecrets,
+			RequireDescription:       env.RequireDescription,
+		}
+	}
+
+	if active.Version == "" && env.Version != nil {
+		active.Version = fmt.Sprintf("%v", env.Version)
+	}
+
+	return convertRawPolicy(&active)
 }
 
 func convertRawPolicy(raw *rawPolicyConfig) (*PolicyConfig, error) {
@@ -178,15 +224,30 @@ func CheckRequestSpec(relPath string, sp *spec.RequestSpec, rawContent string, c
 		return violations
 	}
 
+	var rawMap map[string]any
+	if strings.TrimSpace(rawContent) != "" {
+		_ = yaml.Unmarshal([]byte(rawContent), &rawMap)
+	}
+
 	// 1. Description requirement
-	if cfg.RequireDescription && strings.TrimSpace(sp.Description) == "" && strings.TrimSpace(sp.Name) == "" {
-		violations = append(violations, Violation{
-			File:        relPath,
-			Rule:        "require_description",
-			Severity:    SeverityWarn,
-			Message:     "Request lacks a 'description' or descriptive 'name'",
-			Remediation: "Add a 'description: ...' field explaining endpoint purpose",
-		})
+	if cfg.RequireDescription {
+		hasDesc := false
+		if rawMap != nil {
+			if d, ok := rawMap["description"].(string); ok && strings.TrimSpace(d) != "" {
+				hasDesc = true
+			}
+		} else if strings.TrimSpace(sp.Description) != "" {
+			hasDesc = true
+		}
+		if !hasDesc {
+			violations = append(violations, Violation{
+				File:        relPath,
+				Rule:        "require_description",
+				Severity:    SeverityError,
+				Message:     "Request lacks a 'description' field",
+				Remediation: "Add a 'description: ...' field explaining endpoint purpose",
+			})
+		}
 	}
 
 	// 2. Insecure TLS verification
@@ -223,12 +284,20 @@ func CheckRequestSpec(relPath string, sp *spec.RequestSpec, rawContent string, c
 		if _, ok := t["body"]; ok {
 			hasBodyAssert = true
 		}
+		for k := range t {
+			if strings.HasPrefix(k, "body.") || strings.HasPrefix(k, "json.") {
+				hasBodyAssert = true
+			}
+		}
 		if expr, ok := t["expr"].(string); ok {
 			if strings.Contains(expr, "status") {
 				hasStatusAssert = true
 			}
 			if strings.Contains(expr, "latency") || strings.Contains(expr, "ms") {
 				hasLatencyAssert = true
+			}
+			if strings.Contains(expr, "body") || strings.Contains(expr, "json") {
+				hasBodyAssert = true
 			}
 		}
 	}
@@ -270,7 +339,7 @@ func CheckRequestSpec(relPath string, sp *spec.RequestSpec, rawContent string, c
 
 	// 4. Max latency ceiling
 	if cfg.MaxLatency > 0 {
-		maxAllowedMs := float64(cfg.MaxLatency.Milliseconds())
+		maxAllowedMs := float64(cfg.MaxLatency.Microseconds()) / 1000.0
 		for _, t := range sp.Tests {
 			var specifiedMs float64
 			if mVal, ok := t["max_ms"]; ok {
@@ -281,7 +350,7 @@ func CheckRequestSpec(relPath string, sp *spec.RequestSpec, rawContent string, c
 					specifiedMs = mv
 				case string:
 					if d, err := time.ParseDuration(mv); err == nil {
-						specifiedMs = float64(d.Milliseconds())
+						specifiedMs = float64(d.Microseconds()) / 1000.0
 					}
 				}
 			} else if lVal, ok := t["latency"]; ok {
@@ -296,7 +365,7 @@ func CheckRequestSpec(relPath string, sp *spec.RequestSpec, rawContent string, c
 					s = strings.TrimPrefix(s, "<")
 					s = strings.TrimSpace(s)
 					if d, err := time.ParseDuration(s); err == nil {
-						specifiedMs = float64(d.Milliseconds())
+						specifiedMs = float64(d.Microseconds()) / 1000.0
 					} else if f, err := strconv.ParseFloat(s, 64); err == nil {
 						specifiedMs = f
 					}
@@ -316,10 +385,27 @@ func CheckRequestSpec(relPath string, sp *spec.RequestSpec, rawContent string, c
 
 	// 5. Auth requirement
 	if cfg.RequireAuth {
-		hasAuth := sp.Auth != nil && sp.Auth != "none"
+		hasAuth := false
+		if sp.Auth != nil {
+			switch av := sp.Auth.(type) {
+			case string:
+				trimmed := strings.ToLower(strings.TrimSpace(av))
+				if trimmed != "" && trimmed != "none" && trimmed != "inherit" {
+					hasAuth = true
+				}
+			case map[string]any:
+				if len(av) > 0 {
+					tStr, _ := av["type"].(string)
+					if strings.ToLower(strings.TrimSpace(tStr)) != "none" {
+						hasAuth = true
+					}
+				}
+			}
+		}
 		if !hasAuth {
 			for k := range sp.Headers {
-				if strings.EqualFold(k, "Authorization") || strings.EqualFold(k, "X-API-Key") {
+				if strings.EqualFold(k, "Authorization") || strings.EqualFold(k, "Proxy-Authorization") ||
+					strings.EqualFold(k, "X-API-Key") || strings.EqualFold(k, "Cookie") {
 					hasAuth = true
 					break
 				}
@@ -416,10 +502,11 @@ func AuditZone(z *zone.Zone, scope string, cfg *PolicyConfig) (*PolicyReport, er
 	}
 
 	report := &PolicyReport{
-		ZoneRoot:  z.Root,
-		Scope:     scopeName,
-		Passed:    true,
-		AuditTime: time.Now().UTC().Format(time.RFC3339),
+		ZoneRoot:   z.Root,
+		Scope:      scopeName,
+		Passed:     true,
+		Violations: []Violation{},
+		AuditTime:  time.Now().UTC().Format(time.RFC3339),
 	}
 
 	var requestPaths []string
@@ -446,6 +533,7 @@ func AuditZone(z *zone.Zone, scope string, cfg *PolicyConfig) (*PolicyReport, er
 		if relPath == "" {
 			relPath = filepath.Base(path)
 		}
+		report.checkedFiles = append(report.checkedFiles, relPath)
 
 		rawBytes, _ := os.ReadFile(path)
 		rawContent := string(rawBytes)
@@ -508,21 +596,14 @@ type policyJUnitFailure struct {
 
 // WriteJUnitReport exports the policy report as standard JUnit XML.
 func (r *PolicyReport) WriteJUnitReport(destPath string) error {
-	root := policyJUnitSuites{
-		Name:  "hit-policy",
-		Tests: r.TotalFiles,
-	}
-
 	suite := policyJUnitSuite{
 		Name: "policy-governance",
 	}
 
+	filesWithViolations := make(map[string]bool)
 	for _, v := range r.Violations {
-		if v.Severity == SeverityError {
-			root.Failures++
-			suite.Failures++
-		}
-		suite.Tests++
+		filesWithViolations[v.File] = true
+		suite.Failures++
 		tc := policyJUnitCase{
 			Name:      fmt.Sprintf("%s: %s", v.Rule, v.File),
 			ClassName: v.File,
@@ -535,16 +616,35 @@ func (r *PolicyReport) WriteJUnitReport(destPath string) error {
 		suite.Cases = append(suite.Cases, tc)
 	}
 
-	if len(suite.Cases) == 0 {
-		suite.Tests = 1
-		root.Tests = 1
-		suite.Cases = append(suite.Cases, policyJUnitCase{
-			Name:      "Policy compliance check",
-			ClassName: "policy",
-		})
+	for _, f := range r.checkedFiles {
+		if !filesWithViolations[f] {
+			suite.Cases = append(suite.Cases, policyJUnitCase{
+				Name:      fmt.Sprintf("compliance: %s", f),
+				ClassName: f,
+			})
+		}
 	}
 
-	root.Suites = append(root.Suites, suite)
+	if len(suite.Cases) == 0 {
+		total := r.TotalFiles
+		if total <= 0 {
+			total = 1
+		}
+		for i := 0; i < total; i++ {
+			suite.Cases = append(suite.Cases, policyJUnitCase{
+				Name:      "Policy compliance check",
+				ClassName: "policy",
+			})
+		}
+	}
+
+	suite.Tests = len(suite.Cases)
+	root := policyJUnitSuites{
+		Name:     "hit-policy",
+		Tests:    suite.Tests,
+		Failures: suite.Failures,
+		Suites:   []policyJUnitSuite{suite},
+	}
 
 	data, err := xml.MarshalIndent(root, "", "  ")
 	if err != nil {

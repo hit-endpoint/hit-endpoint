@@ -80,3 +80,59 @@ func TestMCPServerHandshakeAndTools(t *testing.T) {
 		t.Fatalf("expected content in tool call: %+v", resp3)
 	}
 }
+
+func TestMCPShowSecretMaskingAndPerfWriteGuard(t *testing.T) {
+	wsDir, err := filepath.Abs("../../examples/petstore-zone")
+	if err != nil {
+		t.Fatalf("failed to get ws path: %v", err)
+	}
+
+	showReqBytes, _ := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "hit_show",
+			"arguments": map[string]any{
+				"zone": wsDir,
+				"ref":  "petstore/auth/01-login",
+			},
+		},
+	})
+	perfReqBytes, _ := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "hit_perf",
+			"arguments": map[string]any{
+				"zone":  wsDir,
+				"ref":   "petstore/pets/02-create",
+				"total": 2,
+			},
+		},
+	})
+
+	in := bytes.NewBufferString(string(showReqBytes) + "\n" + string(perfReqBytes) + "\n")
+	var out bytes.Buffer
+	if err := ServeStdio(in, &out, wsDir); err != nil {
+		t.Fatalf("ServeStdio error: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected 2 responses, got %d", len(lines))
+	}
+
+	if strings.Contains(lines[0], "hunter2") {
+		t.Errorf("expected hit_show to mask password 'hunter2', got: %s", lines[0])
+	}
+	if !strings.Contains(lines[0], "[MASKED]") {
+		t.Errorf("expected hit_show output to contain [MASKED], got: %s", lines[0])
+	}
+
+	if !strings.Contains(lines[1], "refusing to load-test mutating POST endpoint") {
+		t.Errorf("expected hit_perf to block POST endpoint without allow_write, got: %s", lines[1])
+	}
+}
+

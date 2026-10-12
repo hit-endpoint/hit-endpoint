@@ -147,26 +147,57 @@ type DispatchRequest struct {
 	DurationS    float64 `json:"duration_s,omitempty"`
 }
 
+// ProbeRecord stores a synthetic probe check result reported to the Hub.
+type ProbeRecord struct {
+	ID            string    `json:"id"`
+	NodeID        string    `json:"node_id,omitempty"`
+	ProbeName     string    `json:"probe_name"`
+	Status        string    `json:"status"`
+	PassedRegions int       `json:"passed_regions"`
+	FailedRegions int       `json:"failed_regions"`
+	TotalRegions  int       `json:"total_regions"`
+	Summary       string    `json:"summary"`
+	Timestamp     time.Time `json:"timestamp"`
+	Checks        any       `json:"checks,omitempty"`
+}
+
+// IncidentRecord stores a synthetic probe incident transition reported to the Hub.
+type IncidentRecord struct {
+	ID        string    `json:"id"`
+	NodeID    string    `json:"node_id,omitempty"`
+	ProbeName string    `json:"probe_name"`
+	Action    string    `json:"action"` // "TRIGGER" | "RESOLVE"
+	Status    string    `json:"status"`
+	DedupKey  string    `json:"dedup_key,omitempty"`
+	Summary   string    `json:"summary"`
+	Notified  []string  `json:"notified,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
 // Store provides thread-safe in-memory caching and optional disk persistence.
 type Store struct {
-	mu       sync.RWMutex
-	runs     map[string]*telemetry.RunTelemetryPayload
-	runOrder []string // newest first
-	nodes    map[string]*NodeRecord
-	jobs     map[string]*DispatchJob
-	jobOrder []string // newest first
-	dataDir  string
+	mu        sync.RWMutex
+	runs      map[string]*telemetry.RunTelemetryPayload
+	runOrder  []string // newest first
+	nodes     map[string]*NodeRecord
+	jobs      map[string]*DispatchJob
+	jobOrder  []string // newest first
+	probes    []*ProbeRecord
+	incidents []*IncidentRecord
+	dataDir   string
 }
 
 // NewStore initializes a new Store instance.
 func NewStore(dataDir string) (*Store, error) {
 	s := &Store{
-		runs:     make(map[string]*telemetry.RunTelemetryPayload),
-		runOrder: make([]string, 0),
-		nodes:    make(map[string]*NodeRecord),
-		jobs:     make(map[string]*DispatchJob),
-		jobOrder: make([]string, 0),
-		dataDir:  dataDir,
+		runs:      make(map[string]*telemetry.RunTelemetryPayload),
+		runOrder:  make([]string, 0),
+		nodes:     make(map[string]*NodeRecord),
+		jobs:      make(map[string]*DispatchJob),
+		jobOrder:  make([]string, 0),
+		probes:    make([]*ProbeRecord, 0),
+		incidents: make([]*IncidentRecord, 0),
+		dataDir:   dataDir,
 	}
 
 	if dataDir != "" {
@@ -566,12 +597,23 @@ func (s *Store) HeartbeatNode(nodeID string, req NodeHeartbeatRequest) (*NodeRec
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	now := time.Now().UTC()
 	nr, exists := s.nodes[nodeID]
 	if !exists {
-		return nil, fmt.Errorf("node %q not found", nodeID)
+		nr = &NodeRecord{
+			ID:            nodeID,
+			CommonName:    nodeID,
+			Type:          "perf-worker",
+			Region:        "local",
+			Capabilities:  []string{"perf-worker", "http-load", "test-runner"},
+			State:         "idle",
+			FirstSeen:     now,
+			LastSeen:      now,
+			LastHeartbeat: now,
+		}
+		s.nodes[nodeID] = nr
 	}
 
-	now := time.Now().UTC()
 	nr.LastSeen = now
 	nr.LastHeartbeat = now
 	if req.State != "" {
@@ -777,6 +819,10 @@ func (s *Store) CreateJob(req DispatchRequest) (*DispatchJob, error) {
 	} else {
 		// Dynamic match: find an idle worker matching region & role
 		for _, node := range s.nodes {
+			isWorker := node.Type == "perf-worker" || hasCapability(node, "perf-worker") || hasCapability(node, "test-runner")
+			if !isWorker {
+				continue
+			}
 			if node.State == "idle" || node.State == "healthy" {
 				if req.TargetRegion != "" && !strings.EqualFold(node.Region, req.TargetRegion) {
 					continue
@@ -855,9 +901,17 @@ func (s *Store) ClaimNextJob(nodeID, region string, capabilities []string) (*Dis
 			continue
 		}
 
-		// If already assigned to another node, skip
+		// If already assigned to another node, skip unless that node is not an active worker
 		if job.AssignedNode != "" && job.AssignedNode != nodeID {
-			continue
+			if job.TargetNodeID != "" {
+				continue
+			}
+			if assigned, exists := s.nodes[job.AssignedNode]; exists {
+				isWorker := assigned.Type == "perf-worker" || hasCapability(assigned, "perf-worker") || hasCapability(assigned, "test-runner")
+				if isWorker && (assigned.State == "idle" || assigned.State == "healthy") {
+					continue
+				}
+			}
 		}
 
 		// If targeted to another node, skip
@@ -1018,5 +1072,78 @@ func (j *DispatchJob) clone() *DispatchJob {
 	copy(cp.Logs, j.Logs)
 	return &cp
 }
+
+// RecordProbeCheck stores a synthetic probe check result in the Hub.
+func (s *Store) RecordProbeCheck(rec ProbeRecord) *ProbeRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().UTC()
+	if rec.Timestamp.IsZero() {
+		rec.Timestamp = now
+	}
+	if rec.ID == "" {
+		rec.ID = fmt.Sprintf("probe_chk_%x_%d", now.Unix(), len(s.probes)+1)
+	}
+	cp := rec
+	s.probes = append([]*ProbeRecord{&cp}, s.probes...)
+	if len(s.probes) > 500 {
+		s.probes = s.probes[:500]
+	}
+	return &cp
+}
+
+// ListProbes returns recent synthetic probe check results.
+func (s *Store) ListProbes(limit int) []*ProbeRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if limit <= 0 || limit > len(s.probes) {
+		limit = len(s.probes)
+	}
+	out := make([]*ProbeRecord, limit)
+	for i := 0; i < limit; i++ {
+		cp := *s.probes[i]
+		out[i] = &cp
+	}
+	return out
+}
+
+// RecordIncident stores a synthetic probe incident transition in the Hub.
+func (s *Store) RecordIncident(inc IncidentRecord) *IncidentRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().UTC()
+	if inc.Timestamp.IsZero() {
+		inc.Timestamp = now
+	}
+	if inc.ID == "" {
+		inc.ID = fmt.Sprintf("inc_%x_%d", now.Unix(), len(s.incidents)+1)
+	}
+	cp := inc
+	s.incidents = append([]*IncidentRecord{&cp}, s.incidents...)
+	if len(s.incidents) > 500 {
+		s.incidents = s.incidents[:500]
+	}
+	return &cp
+}
+
+// ListIncidents returns recent synthetic probe incidents.
+func (s *Store) ListIncidents(limit int) []*IncidentRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if limit <= 0 || limit > len(s.incidents) {
+		limit = len(s.incidents)
+	}
+	out := make([]*IncidentRecord, limit)
+	for i := 0; i < limit; i++ {
+		cp := *s.incidents[i]
+		out[i] = &cp
+	}
+	return out
+}
+
 
 

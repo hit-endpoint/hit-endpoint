@@ -83,6 +83,18 @@ func normalizeForJMESPath(v any) any {
 	}
 }
 
+var jmesCompLiteralRe = regexp.MustCompile(`(==|!=|<=|>=|<|>)\s*(-?\d+(?:\.\d+)?|true|false|null)\b`)
+
+func normalizeJMESPathExpr(expr string) string {
+	expr = strings.TrimSpace(expr)
+	if strings.HasPrefix(expr, "$.") {
+		expr = "json." + expr[2:]
+	} else if expr == "$" {
+		expr = "json"
+	}
+	return jmesCompLiteralRe.ReplaceAllString(expr, "$1 `$2`")
+}
+
 func Search(expr string, data any) (any, error) {
 	expr = strings.TrimSpace(expr)
 	if strings.HasPrefix(expr, "$.") {
@@ -90,8 +102,15 @@ func Search(expr string, data any) (any, error) {
 	} else if expr == "$" {
 		expr = "json"
 	}
-	res, err := jmespath.Search(expr, normalizeForJMESPath(data))
+	normData := normalizeForJMESPath(data)
+	res, err := jmespath.Search(expr, normData)
 	if err != nil {
+		normExpr := normalizeJMESPathExpr(expr)
+		if normExpr != expr {
+			if res2, err2 := jmespath.Search(normExpr, normData); err2 == nil {
+				return res2, nil
+			}
+		}
 		return nil, fmt.Errorf("bad expression %q: %w", expr, err)
 	}
 	return res, nil
@@ -255,7 +274,16 @@ func isMatcherMap(m map[string]any) bool {
 
 func Match(actual any, matcher any) (bool, string) {
 	mMap, isMap := matcher.(map[string]any)
-	if !isMap || !isMatcherMap(mMap) {
+	if isMap {
+		if len(mMap) == 0 {
+			return false, "empty matcher map"
+		}
+		for k := range mMap {
+			if !ops[k] {
+				return false, fmt.Sprintf("unknown matcher operator %q", k)
+			}
+		}
+	} else {
 		ok := looseEqual(actual, matcher)
 		if ok {
 			return true, ""
@@ -409,6 +437,59 @@ func Match(actual any, matcher any) (bool, string) {
 	return true, ""
 }
 
+func validateStatusExpected(expected any) error {
+	switch e := expected.(type) {
+	case []any:
+		if len(e) == 0 {
+			return fmt.Errorf("status list cannot be empty")
+		}
+		for _, item := range e {
+			if err := validateStatusExpected(item); err != nil {
+				return err
+			}
+		}
+		return nil
+	case string:
+		pattern := strings.ToLower(strings.TrimSpace(e))
+		if strings.Contains(pattern, "{{") && strings.Contains(pattern, "}}") {
+			return nil
+		}
+		if strings.HasSuffix(pattern, "xx") && len(pattern) == 3 && pattern[0] >= '1' && pattern[0] <= '5' {
+			return nil
+		}
+		for _, op := range []string{"<=", ">=", "<", ">", "==", "!="} {
+			if strings.HasPrefix(pattern, op) {
+				numStr := strings.TrimSpace(strings.TrimPrefix(pattern, op))
+				if s, err := strconv.Atoi(numStr); err == nil && s >= 100 && s <= 599 {
+					return nil
+				}
+				return fmt.Errorf("invalid status assertion %q", e)
+			}
+		}
+		if s, err := strconv.Atoi(pattern); err == nil && s >= 100 && s <= 599 {
+			return nil
+		}
+		return fmt.Errorf("invalid status assertion %q (expected HTTP status code 100-599 or pattern like '2xx')", e)
+	case int:
+		if e < 100 || e > 599 {
+			return fmt.Errorf("invalid status code %d (must be 100-599)", e)
+		}
+		return nil
+	case int64:
+		if e < 100 || e > 599 {
+			return fmt.Errorf("invalid status code %d (must be 100-599)", e)
+		}
+		return nil
+	case float64:
+		if math.Trunc(e) != e || e < 100 || e > 599 {
+			return fmt.Errorf("invalid status code %v (must be integer 100-599)", e)
+		}
+		return nil
+	default:
+		return fmt.Errorf("invalid status assertion %v", expected)
+	}
+}
+
 func StatusOk(status int, expected any) bool {
 	switch e := expected.(type) {
 	case []any:
@@ -422,6 +503,28 @@ func StatusOk(status int, expected any) bool {
 		pattern := strings.ToLower(strings.TrimSpace(e))
 		if strings.HasSuffix(pattern, "xx") && len(pattern) == 3 && pattern[0] >= '0' && pattern[0] <= '9' {
 			return status/100 == int(pattern[0]-'0')
+		}
+		for _, op := range []string{"<=", ">=", "!=", "==", "<", ">"} {
+			if strings.HasPrefix(pattern, op) {
+				numStr := strings.TrimSpace(strings.TrimPrefix(pattern, op))
+				if s, err := strconv.Atoi(numStr); err == nil {
+					switch op {
+					case "<=":
+						return status <= s
+					case ">=":
+						return status >= s
+					case "!=":
+						return status != s
+					case "==":
+						return status == s
+					case "<":
+						return status < s
+					case ">":
+						return status > s
+					}
+				}
+				return false
+			}
 		}
 		s, err := strconv.Atoi(pattern)
 		return err == nil && status == s
@@ -480,6 +583,125 @@ func parseLatencyLimit(v any) (float64, error) {
 	}
 }
 
+func validateMatcherValue(target string, matcher any) []string {
+	mMap, isMap := matcher.(map[string]any)
+	if !isMap {
+		return nil
+	}
+	if len(mMap) == 0 {
+		return []string{fmt.Sprintf("%s: empty matcher map", target)}
+	}
+	var errs []string
+	for op, val := range mMap {
+		if !ops[op] {
+			errs = append(errs, fmt.Sprintf("%s: unknown matcher operator %q", target, op))
+			continue
+		}
+		if op == "matches" {
+			if pat, ok := val.(string); ok && !strings.Contains(pat, "{{") {
+				if _, err := regexp.Compile(pat); err != nil {
+					errs = append(errs, fmt.Sprintf("%s: invalid regex %q: %v", target, pat, err))
+				}
+			}
+		}
+	}
+	return errs
+}
+
+func validateJMESPathExpr(expr string) error {
+	expr = strings.TrimSpace(expr)
+	if strings.Contains(expr, "{{") && strings.Contains(expr, "}}") {
+		return nil
+	}
+	if strings.HasPrefix(expr, "$.") {
+		expr = "json." + expr[2:]
+	} else if expr == "$" {
+		expr = "json"
+	}
+	if _, err := jmespath.Compile(expr); err != nil {
+		norm := normalizeJMESPathExpr(expr)
+		if _, err2 := jmespath.Compile(norm); err2 != nil {
+			return fmt.Errorf("invalid JMESPath expression %q: %w", expr, err)
+		}
+	}
+	return nil
+}
+
+func ValidateTests(tests []map[string]any) []string {
+	var errs []string
+	for _, test := range tests {
+		for key, expected := range test {
+			if key == "name" {
+				continue
+			}
+			switch key {
+			case "status":
+				if err := validateStatusExpected(expected); err != nil {
+					errs = append(errs, err.Error())
+				}
+			case "max_ms", "latency":
+				if s, ok := expected.(string); ok && strings.Contains(s, "{{") {
+					continue
+				}
+				if _, err := parseLatencyLimit(expected); err != nil {
+					errs = append(errs, err.Error())
+				}
+			case "json":
+				expMap, ok := expected.(map[string]any)
+				if !ok {
+					errs = append(errs, "'json' test must map paths to matchers")
+					continue
+				}
+				for path, matcher := range expMap {
+					if err := validateJMESPathExpr(path); err != nil {
+						errs = append(errs, fmt.Sprintf("json.%s: %v", path, err))
+					}
+					errs = append(errs, validateMatcherValue("json."+path, matcher)...)
+				}
+			case "headers":
+				expMap, ok := expected.(map[string]any)
+				if !ok {
+					errs = append(errs, "'headers' test must map header names to matchers")
+					continue
+				}
+				for hName, matcher := range expMap {
+					errs = append(errs, validateMatcherValue("headers."+hName, matcher)...)
+				}
+			case "text":
+				errs = append(errs, validateMatcherValue("text", expected)...)
+			case "expr":
+				if err := validateJMESPathExpr(fmt.Sprintf("%v", expected)); err != nil {
+					errs = append(errs, fmt.Sprintf("expr: %v", err))
+				}
+			default:
+				if strings.HasPrefix(key, "body.") || strings.HasPrefix(key, "json.") {
+					path := strings.TrimPrefix(strings.TrimPrefix(key, "body."), "json.")
+					if err := validateJMESPathExpr(path); err != nil {
+						errs = append(errs, fmt.Sprintf("%s: %v", key, err))
+					}
+					errs = append(errs, validateMatcherValue(key, expected)...)
+					continue
+				}
+				if key == "body" {
+					if expMap, ok := expected.(map[string]any); ok && !isMatcherMap(expMap) {
+						for path, matcher := range expMap {
+							if err := validateJMESPathExpr(path); err != nil {
+								errs = append(errs, fmt.Sprintf("body.%s: %v", path, err))
+							}
+							errs = append(errs, validateMatcherValue("body."+path, matcher)...)
+						}
+						continue
+					}
+					errs = append(errs, validateMatcherValue("body", expected)...)
+					continue
+				}
+				errs = append(errs, fmt.Sprintf("unknown test key %q", key))
+			}
+		}
+	}
+	return errs
+}
+
 func Evaluate(tests []map[string]any, response map[string]any) []TestResult {
 	var results []TestResult
 	for _, test := range tests {
@@ -520,12 +742,16 @@ func evaluateOne(test map[string]any, response map[string]any, results *[]TestRe
 		}
 		switch key {
 		case "status":
-			status, _ := toFloat(response["status"])
-			ok := StatusOk(int(status), expected)
 			name := label
 			if name == "" {
 				name = fmt.Sprintf("status is %v", expected)
 			}
+			if err := validateStatusExpected(expected); err != nil {
+				*results = append(*results, TestResult{Name: name, Passed: false, Detail: err.Error()})
+				continue
+			}
+			status, _ := toFloat(response["status"])
+			ok := StatusOk(int(status), expected)
 			detail := ""
 			if !ok {
 				detail = fmt.Sprintf("got %d", int(status))
@@ -720,3 +946,4 @@ func evaluateOne(test map[string]any, response map[string]any, results *[]TestRe
 		}
 	}
 }
+

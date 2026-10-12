@@ -27,14 +27,17 @@ func InitWizard(opts WizardOptions) (*Zone, error) {
 		return nil, fmt.Errorf("failed to resolve path %s: %w", dir, err)
 	}
 
-	if err := os.MkdirAll(absDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create directory %s: %w", absDir, err)
-	}
-
-	// Check if already a zone
+	// Check if already a zone or nested inside an existing zone
 	zoneFile := filepath.Join(absDir, ZoneFile)
 	if _, err := os.Stat(zoneFile); err == nil {
 		return nil, NewZoneError("zone already exists in %s (%s found)", absDir, ZoneFile)
+	}
+	if parentZone, _ := FindOrNone(filepath.Dir(absDir)); parentZone != nil {
+		return nil, NewZoneError("cannot initialize a nested zone inside existing zone '%s' (%s)", parentZone.Name(), parentZone.Root)
+	}
+
+	if err := os.MkdirAll(absDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create directory %s: %w", absDir, err)
 	}
 
 	name := strings.TrimSpace(opts.Name)

@@ -153,3 +153,85 @@ func TestPolicyReport_WriteJUnitReport(t *testing.T) {
 		t.Errorf("expected 1 failure in junit, got %d", parsed.Failures)
 	}
 }
+
+func TestParsePolicyYAML_RulesWrapperAndUnknownKeys(t *testing.T) {
+	raw := []byte(`
+rules:
+  require_assertions:
+    - status
+    - latency
+  max_latency: 1500ms
+  disallow_insecure_tls: true
+  disallow_hardcoded_secrets: true
+  require_description: true
+  require_auth: true
+`)
+	cfg, err := ParsePolicyYAML(raw)
+	if err != nil {
+		t.Fatalf("ParsePolicyYAML failed on rules: wrapper: %v", err)
+	}
+	if len(cfg.RequireAssertions) != 2 || cfg.MaxLatency != 1500*time.Millisecond || !cfg.RequireDescription || !cfg.RequireAuth {
+		t.Errorf("unexpected parsed config: %+v", cfg)
+	}
+
+	_, err = ParsePolicyYAML([]byte("unknown_wrapper:\n  require_auth: true\n"))
+	if err == nil {
+		t.Errorf("expected error for unknown top-level policy key")
+	}
+}
+
+func TestCheckRequestSpec_RequireDescriptionAndAuth(t *testing.T) {
+	cfg := &PolicyConfig{
+		RequireDescription: true,
+		RequireAuth:        true,
+	}
+	sp := spec.NewRequestSpec()
+	sp.Name = "01-list" // fallback stem name
+	raw := "method: GET\nurl: /pets\n"
+
+	violations := CheckRequestSpec("collections/pets/01-list.yaml", sp, raw, cfg)
+	if len(violations) != 2 {
+		t.Fatalf("expected 2 violations (description + auth), got %d: %+v", len(violations), violations)
+	}
+
+	rep := &PolicyReport{
+		TotalFiles: 1,
+		Passed:     true,
+		Violations: violations,
+	}
+	rep.ApplyStrict(true)
+	if rep.Passed {
+		t.Errorf("expected ApplyStrict(true) to mark report with warnings as failed")
+	}
+}
+
+func TestPolicyReport_WriteJUnitReport_MultipleViolationsPerFile(t *testing.T) {
+	rep := &PolicyReport{
+		ZoneRoot:   "/workspace",
+		Scope:      "all",
+		TotalFiles: 5,
+		Passed:     false,
+		Violations: []Violation{
+			{File: "a.yaml", Rule: "r1", Severity: SeverityError, Message: "m1"},
+			{File: "a.yaml", Rule: "r2", Severity: SeverityError, Message: "m2"},
+			{File: "b.yaml", Rule: "r1", Severity: SeverityError, Message: "m3"},
+		},
+	}
+	tmpDir := t.TempDir()
+	outPath := filepath.Join(tmpDir, "policy-junit.xml")
+	if err := rep.WriteJUnitReport(outPath); err != nil {
+		t.Fatalf("WriteJUnitReport failed: %v", err)
+	}
+	b, _ := os.ReadFile(outPath)
+	var parsed policyJUnitSuites
+	if err := xml.Unmarshal(b, &parsed); err != nil {
+		t.Fatalf("xml unmarshal failed: %v", err)
+	}
+	if parsed.Failures != 3 {
+		t.Errorf("expected 3 failures, got %d", parsed.Failures)
+	}
+	if parsed.Tests < parsed.Failures || parsed.Tests != len(parsed.Suites[0].Cases) {
+		t.Errorf("inconsistent JUnit counts: tests=%d, failures=%d, cases=%d", parsed.Tests, parsed.Failures, len(parsed.Suites[0].Cases))
+	}
+}
+

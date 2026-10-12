@@ -25,6 +25,7 @@ var (
 		"name": true, "method": true, "url": true, "path": true, "headers": true, "query": true, "params": true,
 		"body": true, "auth": true, "timeout": true, "follow_redirects": true, "verify": true,
 		"tests": true, "assert": true, "assertions": true, "captures": true, "vars": true, "hooks": true, "description": true,
+		"unconverted": true,
 	}
 )
 
@@ -51,6 +52,7 @@ type RequestSpec struct {
 	Hooks           map[string]string
 	Description     string
 	Path            string
+	BaseDirOverride string
 	Extra           map[string]any
 }
 
@@ -73,6 +75,9 @@ func NewRequestSpec() *RequestSpec {
 func (s *RequestSpec) BaseDir() string {
 	if s.Path != "" {
 		return filepath.Dir(s.Path)
+	}
+	if s.BaseDirOverride != "" {
+		return s.BaseDirOverride
 	}
 	cwd, _ := os.Getwd()
 	return cwd
@@ -151,44 +156,79 @@ func MergeHeaders(base map[string]any, newHeaders map[string]any) map[string]any
 	return out
 }
 
+func deepCopyMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = deepCopyAny(v)
+	}
+	return out
+}
+
+func deepCopyAny(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		return deepCopyMap(val)
+	case []any:
+		out := make([]any, len(val))
+		for i, item := range val {
+			out[i] = deepCopyAny(item)
+		}
+		return out
+	case []map[string]any:
+		out := make([]map[string]any, len(val))
+		for i, item := range val {
+			out[i] = deepCopyMap(item)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
 func CloneSpec(s *RequestSpec) *RequestSpec {
 	out := &RequestSpec{
 		Name:            s.Name,
 		Method:          s.Method,
 		Url:             s.Url,
-		Headers:         make(map[string]any, len(s.Headers)),
-		Query:           make(map[string]any, len(s.Query)),
-		Body:            s.Body,
-		Auth:            s.Auth,
+		Headers:         deepCopyMap(s.Headers),
+		Query:           deepCopyMap(s.Query),
+		Body:            deepCopyMap(s.Body),
+		Auth:            deepCopyAny(s.Auth),
 		Timeout:         s.Timeout,
 		FollowRedirects: s.FollowRedirects,
 		Verify:          s.Verify,
 		Tests:           make([]map[string]any, len(s.Tests)),
-		Captures:        make(map[string]any, len(s.Captures)),
-		Vars:            make(map[string]any, len(s.Vars)),
+		Captures:        deepCopyMap(s.Captures),
+		Vars:            deepCopyMap(s.Vars),
 		Hooks:           make(map[string]string, len(s.Hooks)),
 		Description:     s.Description,
 		Path:            s.Path,
-		Extra:           make(map[string]any, len(s.Extra)),
+		BaseDirOverride: s.BaseDirOverride,
+		Extra:           deepCopyMap(s.Extra),
 	}
-	for k, v := range s.Headers {
-		out.Headers[k] = v
+	if out.Headers == nil {
+		out.Headers = make(map[string]any)
 	}
-	for k, v := range s.Query {
-		out.Query[k] = v
+	if out.Query == nil {
+		out.Query = make(map[string]any)
 	}
-	copy(out.Tests, s.Tests)
-	for k, v := range s.Captures {
-		out.Captures[k] = v
+	if out.Captures == nil {
+		out.Captures = make(map[string]any)
 	}
-	for k, v := range s.Vars {
-		out.Vars[k] = v
+	if out.Vars == nil {
+		out.Vars = make(map[string]any)
+	}
+	if out.Extra == nil {
+		out.Extra = make(map[string]any)
+	}
+	for i, t := range s.Tests {
+		out.Tests[i] = deepCopyMap(t)
 	}
 	for k, v := range s.Hooks {
 		out.Hooks[k] = v
-	}
-	for k, v := range s.Extra {
-		out.Extra[k] = v
 	}
 	return out
 }
@@ -331,7 +371,7 @@ func SpecFromDict(data map[string]any, defaults []map[string]any, baseDir string
 	}
 	spec := NewRequestSpec()
 	if baseDir != "" {
-		spec.Path = filepath.Join(baseDir, "adhoc.yaml")
+		spec.BaseDirOverride = baseDir
 	}
 	spec.Name = name
 

@@ -10,13 +10,55 @@ import (
 	"strings"
 
 	"github.com/hit-endpoint/hit-endpoint/internal/flows"
+	"github.com/hit-endpoint/hit-endpoint/internal/history"
 	"github.com/hit-endpoint/hit-endpoint/internal/perf"
+	"github.com/hit-endpoint/hit-endpoint/internal/report"
 	"github.com/hit-endpoint/hit-endpoint/internal/runner"
 	"github.com/hit-endpoint/hit-endpoint/internal/sanity"
 	"github.com/hit-endpoint/hit-endpoint/internal/spec"
 	"github.com/hit-endpoint/hit-endpoint/internal/types"
 	"github.com/hit-endpoint/hit-endpoint/internal/zone"
 )
+
+func maskMCPValue(v any, maskFn func(string) string) any {
+	switch val := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(val))
+		for k, item := range val {
+			if history.IsSensitiveKey(k) {
+				if s, ok := item.(string); ok && s != "" {
+					out[k] = "********"
+					continue
+				}
+			}
+			out[k] = maskMCPValue(item, maskFn)
+		}
+		return out
+	case []any:
+		out := make([]any, len(val))
+		for i, item := range val {
+			out[i] = maskMCPValue(item, maskFn)
+		}
+		return out
+	case string:
+		masked := history.MaskJSONText(val, maskFn)
+		if maskFn != nil {
+			masked = maskFn(masked)
+		}
+		return masked
+	default:
+		return v
+	}
+}
+
+func isWriteMethod(m string) bool {
+	switch strings.ToUpper(strings.TrimSpace(m)) {
+	case "POST", "PUT", "DELETE", "PATCH":
+		return true
+	default:
+		return false
+	}
+}
 
 type JSONRPCRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -170,9 +212,9 @@ func getTools() []Tool {
 			InputSchema: &JSONSchema{
 				Type: "object",
 				Properties: map[string]Property{
-					"zone": {Type: "string", Description: "Path to zone directory (defaults to current dir)"},
-					"env":       {Type: "string", Description: "Environment name to validate against (defaults to default_environment)"},
-					"offline":   {Type: "boolean", Description: "Skip live server ping check"},
+					"zone":    {Type: "string", Description: "Path to zone directory (defaults to current dir)"},
+					"env":     {Type: "string", Description: "Environment name to validate against (defaults to default_environment)"},
+					"offline": {Type: "boolean", Description: "Skip live server ping check"},
 				},
 			},
 		},
@@ -182,8 +224,8 @@ func getTools() []Tool {
 			InputSchema: &JSONSchema{
 				Type: "object",
 				Properties: map[string]Property{
-					"zone": {Type: "string", Description: "Path to zone directory"},
-					"folder":    {Type: "string", Description: "Optional subfolder to filter requests"},
+					"zone":   {Type: "string", Description: "Path to zone directory"},
+					"folder": {Type: "string", Description: "Optional subfolder to filter requests"},
 				},
 			},
 		},
@@ -193,11 +235,11 @@ func getTools() []Tool {
 			InputSchema: &JSONSchema{
 				Type: "object",
 				Properties: map[string]Property{
-					"ref":       {Type: "string", Description: "Request reference (e.g. 'pets/create' or 'auth/login')"},
+					"ref":  {Type: "string", Description: "Request reference (e.g. 'pets/create' or 'auth/login')"},
 					"zone": {Type: "string", Description: "Path to zone directory"},
-					"env":       {Type: "string", Description: "Target environment name"},
-					"curl":      {Type: "boolean", Description: "Render as executable curl command"},
-					"vars":      {Type: "object", Description: "Optional key-value variable overrides"},
+					"env":  {Type: "string", Description: "Target environment name"},
+					"curl": {Type: "boolean", Description: "Render as executable curl command"},
+					"vars": {Type: "object", Description: "Optional key-value variable overrides"},
 				},
 				Required: []string{"ref"},
 			},
@@ -208,10 +250,10 @@ func getTools() []Tool {
 			InputSchema: &JSONSchema{
 				Type: "object",
 				Properties: map[string]Property{
-					"ref":       {Type: "string", Description: "Request or flow reference (e.g. 'login-and-crud' or 'pets/list')"},
+					"ref":  {Type: "string", Description: "Request or flow reference (e.g. 'login-and-crud' or 'pets/list')"},
 					"zone": {Type: "string", Description: "Path to zone directory"},
-					"env":       {Type: "string", Description: "Target environment name"},
-					"vars":      {Type: "object", Description: "Optional key-value variable overrides"},
+					"env":  {Type: "string", Description: "Target environment name"},
+					"vars": {Type: "object", Description: "Optional key-value variable overrides"},
 				},
 				Required: []string{"ref"},
 			},
@@ -223,11 +265,12 @@ func getTools() []Tool {
 				Type: "object",
 				Properties: map[string]Property{
 					"ref":         {Type: "string", Description: "Request or flow reference to benchmark"},
-					"zone":   {Type: "string", Description: "Path to zone directory"},
+					"zone":        {Type: "string", Description: "Path to zone directory"},
 					"env":         {Type: "string", Description: "Target environment name"},
 					"concurrency": {Type: "integer", Description: "Number of concurrent workers (default 10)"},
 					"requests":    {Type: "integer", Description: "Total number of iterations to run (default 50)"},
 					"threshold":   {Type: "string", Description: "SLO threshold rules (e.g. 'p95<200ms,errors<1%')"},
+					"allow_write": {Type: "boolean", Description: "Explicitly allow load-testing write endpoints (POST, PUT, DELETE, PATCH)"},
 					"vars":        {Type: "object", Description: "Optional key-value variable overrides"},
 				},
 				Required: []string{"ref"},
@@ -240,8 +283,8 @@ func getTools() []Tool {
 				Type: "object",
 				Properties: map[string]Property{
 					"zone": {Type: "string", Description: "Path to zone directory"},
-					"env":       {Type: "string", Description: "Target environment name"},
-					"vars":      {Type: "object", Description: "Optional key-value variable overrides"},
+					"env":  {Type: "string", Description: "Target environment name"},
+					"vars": {Type: "object", Description: "Optional key-value variable overrides"},
 				},
 			},
 		},
@@ -317,10 +360,10 @@ func executeTool(name string, args map[string]any, defaultZone string) CallToolR
 		}
 
 		data := map[string]any{
-			"zone":         z.Name(),
-			"servers":      z.ServerNames(),
-			"requests":     reqList,
-			"chains":       flowList,
+			"zone":     z.Name(),
+			"servers":  z.ServerNames(),
+			"requests": reqList,
+			"chains":   flowList,
 		}
 		b, _ := json.MarshalIndent(data, "", "  ")
 		return CallToolResult{Content: []ContentItem{{Type: "text", Text: string(b)}}}
@@ -330,10 +373,10 @@ func executeTool(name string, args map[string]any, defaultZone string) CallToolR
 		curlMode, _ := args["curl"].(bool)
 
 		sess, err := runner.NewSession(runner.SessionOptions{
-			Zone: z,
+			Zone:       z,
 			ServerName: serverName,
-			ExtraVars: extraVars,
-			Persist:   false,
+			ExtraVars:  extraVars,
+			Persist:    false,
 		})
 		if err != nil {
 			return CallToolResult{Content: []ContentItem{{Type: "text", Text: err.Error()}}, IsError: true}
@@ -354,12 +397,21 @@ func executeTool(name string, args map[string]any, defaultZone string) CallToolR
 			return CallToolResult{Content: []ContentItem{{Type: "text", Text: prepared.ToCurl(ctx)}}}
 		}
 
+		maskedHeaders := make(map[string]string, len(prepared.Headers))
+		for k, v := range prepared.Headers {
+			if history.IsSensitiveHeader(k) {
+				maskedHeaders[k] = "********"
+			} else {
+				maskedHeaders[k] = ctx.Mask(v)
+			}
+		}
+
 		dict := map[string]any{
 			"name":    sp.Name,
 			"method":  prepared.Method,
-			"url":     prepared.FullURL(),
-			"headers": prepared.Headers,
-			"body":    prepared.BodyPreview,
+			"url":     ctx.Mask(prepared.FullURL()),
+			"headers": maskedHeaders,
+			"body":    maskMCPValue(prepared.BodyPreview, ctx.Mask),
 		}
 		b, _ := json.MarshalIndent(dict, "", "  ")
 		return CallToolResult{Content: []ContentItem{{Type: "text", Text: string(b)}}}
@@ -367,10 +419,10 @@ func executeTool(name string, args map[string]any, defaultZone string) CallToolR
 	case "hit_run":
 		ref, _ := args["ref"].(string)
 		sess, err := runner.NewSession(runner.SessionOptions{
-			Zone: z,
+			Zone:       z,
 			ServerName: serverName,
-			ExtraVars: extraVars,
-			Persist:   true,
+			ExtraVars:  extraVars,
+			Persist:    true,
 		})
 		if err != nil {
 			return CallToolResult{Content: []ContentItem{{Type: "text", Text: err.Error()}}, IsError: true}
@@ -384,15 +436,20 @@ func executeTool(name string, args map[string]any, defaultZone string) CallToolR
 				return CallToolResult{Content: []ContentItem{{Type: "text", Text: err.Error()}}, IsError: true}
 			}
 			fr := flows.RunFlow(sess, flowData, nil, nil, false, 0)
+			sanitized := report.SanitizeResults(fr.Results, sess.Mask)
 			var list []any
-			for _, r := range fr.Results {
-				list = append(list, r.ToDict())
+			for _, r := range sanitized {
+				d := r.ToDict()
+				if r.JSON != nil {
+					d["json"] = maskMCPValue(r.JSON, sess.Mask)
+				}
+				list = append(list, d)
 			}
 			data := map[string]any{
 				"flow":    fr.Name,
 				"ok":      fr.OK(),
 				"results": list,
-				"error":   fr.Error,
+				"error":   sess.Mask(fr.Error),
 			}
 			b, _ := json.MarshalIndent(data, "", "  ")
 			return CallToolResult{Content: []ContentItem{{Type: "text", Text: string(b)}}, IsError: !fr.OK()}
@@ -403,7 +460,12 @@ func executeTool(name string, args map[string]any, defaultZone string) CallToolR
 			return CallToolResult{Content: []ContentItem{{Type: "text", Text: err.Error()}}, IsError: true}
 		}
 		res := sess.RunSpec(sp, nil)
-		b, _ := json.MarshalIndent(res.ToDict(), "", "  ")
+		sanitized := report.SanitizeResults([]*types.Result{res}, sess.Mask)
+		d := sanitized[0].ToDict()
+		if res.JSON != nil {
+			d["json"] = maskMCPValue(res.JSON, sess.Mask)
+		}
+		b, _ := json.MarshalIndent(d, "", "  ")
 		return CallToolResult{Content: []ContentItem{{Type: "text", Text: string(b)}}, IsError: !res.OK()}
 
 	case "hit_perf":
@@ -417,6 +479,7 @@ func executeTool(name string, args map[string]any, defaultZone string) CallToolR
 			requests = int(r)
 		}
 		thresholdStr, _ := args["threshold"].(string)
+		allowWrite, _ := args["allow_write"].(bool)
 
 		opts := perf.PerfOptions{
 			Concurrency: concurrency,
@@ -424,10 +487,10 @@ func executeTool(name string, args map[string]any, defaultZone string) CallToolR
 		}
 
 		sess, err := runner.NewSession(runner.SessionOptions{
-			Zone: z,
+			Zone:       z,
 			ServerName: serverName,
-			ExtraVars: extraVars,
-			Persist:   false,
+			ExtraVars:  extraVars,
+			Persist:    false,
 		})
 		if err != nil {
 			return CallToolResult{Content: []ContentItem{{Type: "text", Text: err.Error()}}, IsError: true}
@@ -441,6 +504,24 @@ func executeTool(name string, args map[string]any, defaultZone string) CallToolR
 			if err != nil {
 				return CallToolResult{Content: []ContentItem{{Type: "text", Text: err.Error()}}, IsError: true}
 			}
+			if !allowWrite {
+				if steps, ok := flowData["steps"].([]any); ok {
+					for _, rawStep := range steps {
+						step, ok := rawStep.(map[string]any)
+						if !ok {
+							continue
+						}
+						if reqRef, ok := step["request"].(string); ok && reqRef != "" {
+							if stepSp, err := sess.Load(reqRef); err == nil && isWriteMethod(stepSp.Method) {
+								return CallToolResult{
+									Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("refusing to load-test flow %q containing mutating %s step %q without allow_write: true", ref, stepSp.Method, reqRef)}},
+									IsError: true,
+								}
+							}
+						}
+					}
+				}
+			}
 			rep, err = perf.RunFlowPerf(sess, ref, flowData, opts)
 			if err != nil {
 				return CallToolResult{Content: []ContentItem{{Type: "text", Text: err.Error()}}, IsError: true}
@@ -449,6 +530,12 @@ func executeTool(name string, args map[string]any, defaultZone string) CallToolR
 			sp, err := sess.Load(ref)
 			if err != nil {
 				return CallToolResult{Content: []ContentItem{{Type: "text", Text: err.Error()}}, IsError: true}
+			}
+			if !allowWrite && isWriteMethod(sp.Method) {
+				return CallToolResult{
+					Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("refusing to load-test mutating %s endpoint %q without allow_write: true", sp.Method, ref)}},
+					IsError: true,
+				}
 			}
 			rep, err = perf.RunPerf(sess, sp, opts)
 			if err != nil {
@@ -486,16 +573,16 @@ func executeTool(name string, args map[string]any, defaultZone string) CallToolR
 
 	case "hit_vars":
 		sess, err := runner.NewSession(runner.SessionOptions{
-			Zone: z,
+			Zone:       z,
 			ServerName: serverName,
-			ExtraVars: extraVars,
-			Persist:   false,
+			ExtraVars:  extraVars,
+			Persist:    false,
 		})
 		if err != nil {
 			return CallToolResult{Content: []ContentItem{{Type: "text", Text: err.Error()}}, IsError: true}
 		}
 		defer sess.Close()
-		vars := sess.Variables()
+		vars := maskMCPValue(sess.Variables(), sess.Mask)
 		b, _ := json.MarshalIndent(vars, "", "  ")
 		return CallToolResult{Content: []ContentItem{{Type: "text", Text: string(b)}}}
 

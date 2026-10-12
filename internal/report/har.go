@@ -167,9 +167,13 @@ func parseQueryParams(rawURL string) []HARQueryParam {
 
 	for _, k := range keys {
 		for _, v := range q[k] {
+			val := v
+			if history.IsSensitiveKey(k) {
+				val = "[MASKED]"
+			}
 			params = append(params, HARQueryParam{
 				Name:  k,
-				Value: v,
+				Value: val,
 			})
 		}
 	}
@@ -192,9 +196,13 @@ func parseHeaders(headerMap map[string]string) ([]HARHeader, []HARCookie) {
 
 	for _, k := range keys {
 		val := headerMap[k]
+		headerVal := val
+		if history.IsSensitiveHeader(k) {
+			headerVal = "[MASKED]"
+		}
 		headers = append(headers, HARHeader{
 			Name:  k,
-			Value: val,
+			Value: headerVal,
 		})
 
 		lower := strings.ToLower(k)
@@ -208,13 +216,9 @@ func parseHeaders(headerMap map[string]string) ([]HARHeader, []HARCookie) {
 				}
 				kv := strings.SplitN(part, "=", 2)
 				cName := strings.TrimSpace(kv[0])
-				cVal := ""
-				if len(kv) == 2 {
-					cVal = strings.TrimSpace(kv[1])
-				}
 				cookies = append(cookies, HARCookie{
 					Name:  cName,
-					Value: cVal,
+					Value: "[MASKED]",
 				})
 			}
 		} else if lower == "set-cookie" {
@@ -223,13 +227,9 @@ func parseHeaders(headerMap map[string]string) ([]HARHeader, []HARCookie) {
 			if len(parts) > 0 {
 				kv := strings.SplitN(strings.TrimSpace(parts[0]), "=", 2)
 				cName := strings.TrimSpace(kv[0])
-				cVal := ""
-				if len(kv) == 2 {
-					cVal = strings.TrimSpace(kv[1])
-				}
 				cookie := HARCookie{
 					Name:  cName,
-					Value: cVal,
+					Value: "[MASKED]",
 				}
 				for _, attr := range parts[1:] {
 					attr = strings.TrimSpace(attr)
@@ -296,20 +296,23 @@ func BuildHARFromResults(results []*types.Result) *HAR {
 		respHeaders, respCookies := parseHeaders(r.Headers)
 		queryParams := parseQueryParams(r.Url)
 
-		reqMime := detectMimeType(r.RequestHeaders, r.RequestBody)
+		maskedReqBody := history.MaskJSONText(r.RequestBody, nil)
+		maskedRespBody := history.MaskJSONText(r.Text, nil)
+
+		reqMime := detectMimeType(r.RequestHeaders, maskedReqBody)
 		var postData *HARPostData
-		if r.RequestBody != "" {
+		if maskedReqBody != "" {
 			postData = &HARPostData{
 				MimeType: reqMime,
-				Text:     r.RequestBody,
+				Text:     maskedReqBody,
 				Params:   []HARParam{},
 			}
 		}
 
-		respMime := detectMimeType(r.Headers, r.Text)
+		respMime := detectMimeType(r.Headers, maskedRespBody)
 		contentSize := r.Size
-		if contentSize <= 0 && r.Text != "" {
-			contentSize = int64(len(r.Text))
+		if contentSize <= 0 && maskedRespBody != "" {
+			contentSize = int64(len(maskedRespBody))
 		}
 
 		statusText := r.Reason
@@ -342,7 +345,7 @@ func BuildHARFromResults(results []*types.Result) *HAR {
 				QueryString: queryParams,
 				PostData:    postData,
 				HeadersSize: estimateHeadersSize(reqHeaders),
-				BodySize:    int64(len(r.RequestBody)),
+				BodySize:    int64(len(maskedReqBody)),
 			},
 			Response: HARResponse{
 				Status:      r.Status,
@@ -353,7 +356,7 @@ func BuildHARFromResults(results []*types.Result) *HAR {
 				Content: HARContent{
 					Size:     contentSize,
 					MimeType: respMime,
-					Text:     r.Text,
+					Text:     maskedRespBody,
 				},
 				RedirectURL: redirectURL,
 				HeadersSize: estimateHeadersSize(respHeaders),
@@ -391,20 +394,23 @@ func BuildHARFromHistory(entries []*history.Entry) *HAR {
 		respHeaders, respCookies := parseHeaders(e.ResponseHeaders)
 		queryParams := parseQueryParams(e.Url)
 
-		reqMime := detectMimeType(e.Headers, e.Body)
+		maskedReqBody := history.MaskJSONText(e.Body, nil)
+		maskedRespBody := history.MaskJSONText(e.ResponseBody, nil)
+
+		reqMime := detectMimeType(e.Headers, maskedReqBody)
 		var postData *HARPostData
-		if e.Body != "" {
+		if maskedReqBody != "" {
 			postData = &HARPostData{
 				MimeType: reqMime,
-				Text:     e.Body,
+				Text:     maskedReqBody,
 				Params:   []HARParam{},
 			}
 		}
 
-		respMime := detectMimeType(e.ResponseHeaders, e.ResponseBody)
+		respMime := detectMimeType(e.ResponseHeaders, maskedRespBody)
 		contentSize := e.ResponseSize
-		if contentSize <= 0 && e.ResponseBody != "" {
-			contentSize = int64(len(e.ResponseBody))
+		if contentSize <= 0 && maskedRespBody != "" {
+			contentSize = int64(len(maskedRespBody))
 		}
 
 		statusText := e.Reason
@@ -437,7 +443,7 @@ func BuildHARFromHistory(entries []*history.Entry) *HAR {
 				QueryString: queryParams,
 				PostData:    postData,
 				HeadersSize: estimateHeadersSize(reqHeaders),
-				BodySize:    int64(len(e.Body)),
+				BodySize:    int64(len(maskedReqBody)),
 			},
 			Response: HARResponse{
 				Status:      e.Status,
@@ -448,7 +454,7 @@ func BuildHARFromHistory(entries []*history.Entry) *HAR {
 				Content: HARContent{
 					Size:     contentSize,
 					MimeType: respMime,
-					Text:     e.ResponseBody,
+					Text:     maskedRespBody,
 				},
 				RedirectURL: redirectURL,
 				HeadersSize: estimateHeadersSize(respHeaders),

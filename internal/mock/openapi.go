@@ -336,15 +336,26 @@ func (e *OpenAPIMockEngine) compileRoutes() error {
 	return nil
 }
 
+func (e *OpenAPIMockEngine) isCollectionRoute(prefix string) bool {
+	for _, r := range e.routes {
+		if r.Method == "POST" && r.PathPattern == prefix {
+			return true
+		}
+		if strings.HasPrefix(r.PathPattern, prefix+"/{") {
+			return true
+		}
+	}
+	return false
+}
+
 func (e *OpenAPIMockEngine) seedState() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// Look for collection endpoints: GET /prefix and POST /prefix
+	// Look for collection endpoints: GET /prefix and POST /prefix or /prefix/{id}
 	for _, r := range e.routes {
 		if r.Method == "GET" && !strings.Contains(r.PathPattern, "{") {
 			prefix := r.PathPattern
-			// Generate 2 sample seed items
 			resp := e.pickSuccessResponse(r)
 			schema := e.extractResponseSchema(resp)
 			if schema != nil {
@@ -378,18 +389,36 @@ func (e *OpenAPIMockEngine) seedState() {
 					e.initialSeed[prefix] = append([]map[string]any(nil), seeds...)
 					e.nextID[prefix] = len(seeds) + 1
 				}
+			} else if e.isCollectionRoute(prefix) {
+				var seeds []map[string]any
+				if strings.Contains(strings.ToLower(prefix), "pet") {
+					seeds = []map[string]any{
+						{"id": 1, "name": "Rex", "kind": "dog", "age": 3},
+						{"id": 2, "name": "Tom", "kind": "cat", "age": 5},
+					}
+				} else {
+					seeds = []map[string]any{
+						e.generateSampleObject(nil, 1),
+						e.generateSampleObject(nil, 2),
+					}
+				}
+				e.stateStore[prefix] = seeds
+				e.initialSeed[prefix] = append([]map[string]any(nil), seeds...)
+				e.nextID[prefix] = len(seeds) + 1
 			}
 		}
 	}
 }
 
 func (e *OpenAPIMockEngine) generateSampleObject(schema any, id int) map[string]any {
-	sample := generateSample(e.spec.RawDoc, schema, 0)
-	if m, ok := sample.(map[string]any); ok {
-		if _, hasID := m["id"]; hasID {
-			m["id"] = id
+	if schema != nil {
+		sample := generateSample(e.spec.RawDoc, schema, 0)
+		if m, ok := sample.(map[string]any); ok {
+			if _, hasID := m["id"]; hasID {
+				m["id"] = id
+			}
+			return m
 		}
-		return m
 	}
 	return map[string]any{"id": id, "name": fmt.Sprintf("Item %d", id)}
 }
@@ -707,33 +736,14 @@ func (e *OpenAPIMockEngine) handleStatefulCRUD(w http.ResponseWriter, r *http.Re
 			}
 		}
 
-		// Not found in active store: return 404 if requested or synthesize
-		if r.Header.Get("X-Hit-Mock-Status") == "404" || strings.Contains(r.Header.Get("Prefer"), "status=404") {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusNotFound)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"error":   "not_found",
-				"message": fmt.Sprintf("Item %s not found in %s", idParam, collectionPrefix),
-			})
-			return true
-		}
-
-		// Synthesize sample matching requested ID
-		resp := e.pickSuccessResponse(route)
-		schema := e.extractResponseSchema(resp)
-		sample := generateSample(e.spec.RawDoc, schema, 0)
-		if m, ok := sample.(map[string]any); ok {
-			if numID, err := strconv.Atoi(idParam); err == nil {
-				m["id"] = numID
-			} else {
-				m["id"] = idParam
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(m)
-			return true
-		}
-		return false
+		// Not found in stateful store -> return 404 Not Found
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error":   "not_found",
+			"message": fmt.Sprintf("Item %s not found in %s", idParam, collectionPrefix),
+		})
+		return true
 	}
 
 	// 4. PUT / PATCH /collection/{id} -> Update item
@@ -908,7 +918,20 @@ func (e *OpenAPIMockEngine) handleDynamicResponse(w http.ResponseWriter, r *http
 		return
 	}
 
-	w.WriteHeader(status)
+	if strings.Contains(strings.ToLower(route.PathPattern), "login") {
+		e.writePayload(w, status, "application/json", map[string]any{
+			"access_token": Token,
+			"token":        Token,
+			"token_type":   "bearer",
+			"expires_in":   3600,
+		})
+		return
+	}
+
+	e.writePayload(w, status, "application/json", map[string]any{
+		"status": "ok",
+		"path":   r.URL.Path,
+	})
 }
 
 func (e *OpenAPIMockEngine) resolveStatusCode(r *http.Request, route *OpenAPIRoute) int {

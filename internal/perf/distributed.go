@@ -246,7 +246,15 @@ func (ws *WorkerServer) runHubEnrollmentAndHeartbeat(l net.Listener) {
 	advURL := ws.AdvertiseURL
 	if advURL == "" {
 		if l != nil {
-			advURL = "http://" + l.Addr().String()
+			host, port, err := net.SplitHostPort(l.Addr().String())
+			if err == nil {
+				if host == "" || host == "0.0.0.0" || host == "::" || host == "[::]" {
+					host = "127.0.0.1"
+				}
+				advURL = fmt.Sprintf("http://%s:%s", host, port)
+			} else {
+				advURL = "http://" + l.Addr().String()
+			}
 		} else {
 			advURL = fmt.Sprintf("http://127.0.0.1:%d", ws.Port)
 		}
@@ -891,7 +899,7 @@ func MergePerfReports(reports []*types.PerfReport) *types.PerfReport {
 // DistributeJob coordinates a distributed performance test across multiple worker nodes.
 func DistributeJob(ctx context.Context, workers []string, sp *spec.RequestSpec, opts PerfOptions, coordOpts *CoordinatorOptions) (*DistributedPerfReport, error) {
 	client := http.DefaultClient
-	pollRate := 500 * time.Millisecond
+	pollRate := 50 * time.Millisecond
 	var onProgress func(int, float64, []WorkerMetrics)
 	if coordOpts != nil {
 		if coordOpts.Client != nil {
@@ -1141,14 +1149,17 @@ FetchReports:
 
 	// 6. Merge reports into unified global result
 	globalReport := MergePerfReports(reportsToMerge)
-	globalReport.DurationS = math.Round(time.Since(startCoord).Seconds()*100) / 100
+	coordTime := math.Round(time.Since(startCoord).Seconds()*100) / 100
+	if globalReport.DurationS <= 0 {
+		globalReport.DurationS = coordTime
+	}
 
 	distReport := &DistributedPerfReport{
 		Global:           globalReport,
 		Workers:          summaries,
 		TotalWorkers:     numWorkers,
 		ThresholdsPassed: true,
-		CoordinatorTimeS: globalReport.DurationS,
+		CoordinatorTimeS: coordTime,
 	}
 
 	return distReport, nil

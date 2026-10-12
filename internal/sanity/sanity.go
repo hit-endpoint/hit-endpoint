@@ -222,6 +222,55 @@ func RunSanity(z *zone.Zone, serverName string, scope string, ping bool, timeout
 		}
 	}
 
+	// 3b. Validate additional servers when no explicit -s server was specified
+	if serverName == "" && len(serverNames) > 1 {
+		for _, srvName := range serverNames {
+			if srvName == chosen {
+				continue
+			}
+			otherSrv, err := z.LoadServer(srvName)
+			if err != nil {
+				rep.Add("fail", fmt.Sprintf("server '%s' does not load", srvName), err.Error(), "fix the YAML in that file")
+				continue
+			}
+			if otherSrv == nil {
+				continue
+			}
+			if bu, ok := otherSrv.Vars["base_url"]; !ok || fmt.Sprintf("%v", bu) == "" {
+				rep.Add("warn", fmt.Sprintf("server '%s' has no base_url", srvName),
+					"requests with relative urls will fail when using -s "+srvName,
+					fmt.Sprintf("add 'base_url: https://...' to servers/%s.yaml", srvName))
+			}
+			placeholders := templating.FindPlaceholders(map[string]any{"v": otherSrv.Vars, "a": otherSrv.Auth})
+			var missingOS []string
+			for _, name := range placeholders {
+				lower := strings.ToLower(name)
+				if strings.HasPrefix(lower, "$env:") {
+					rest := name[5:]
+					if !strings.Contains(rest, ":") {
+						if _, set := os.LookupEnv(rest); !set {
+							missingOS = append(missingOS, rest)
+						}
+					}
+				}
+			}
+			sort.Strings(missingOS)
+			if len(missingOS) > 0 {
+				rep.Add("fail", fmt.Sprintf("server '%s' references unset OS environment variables: %s", srvName, strings.Join(missingOS, ", ")),
+					fmt.Sprintf("servers/%s.yaml uses {{$env:NAME}} for these", srvName),
+					"export them in your shell or add defaults {{$env:NAME:default}}")
+			}
+			if am, ok := otherSrv.Auth.(map[string]any); ok {
+				kind := strings.ToLower(fmt.Sprintf("%v", am["type"]))
+				switch kind {
+				case "bearer", "basic", "apikey", "api_key", "api-key", "header", "none", "noauth":
+				default:
+					rep.Add("fail", fmt.Sprintf("server '%s' auth type '%s' is not supported", srvName, kind), "", "use bearer, basic, apikey, header or none")
+				}
+			}
+		}
+	}
+
 	// 4. Collections
 	scopeDir := z.CollectionsDir()
 	if scope != "" {

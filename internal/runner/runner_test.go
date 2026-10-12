@@ -383,6 +383,22 @@ func TestPerfReportsLatency(t *testing.T) {
 	if report.StatusCounts[200] != 40 {
 		t.Errorf("expected 40 status 200, got %v", report.StatusCounts)
 	}
+
+	// Verify concurrent secret collection on an auth endpoint with body secrets and captures
+	loginSp, err := sess.Load("petstore/auth/01-login")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginReport, err := perf.RunPerf(sess, loginSp, perf.PerfOptions{
+		Concurrency: 8,
+		Total:       40,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loginReport.Completed != 40 || loginReport.Failed != 0 {
+		t.Errorf("expected 40 login completed and 0 failed, got %d and %d", loginReport.Completed, loginReport.Failed)
+	}
 }
 
 func TestAfterHookDoesNotOverwriteFreshCaptures(t *testing.T) {

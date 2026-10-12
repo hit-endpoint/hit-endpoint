@@ -10,8 +10,61 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hit-endpoint/hit-endpoint/internal/history"
 	"github.com/hit-endpoint/hit-endpoint/internal/types"
 )
+
+// SanitizeResults returns shallow copies of results with sensitive headers, captures, and bodies masked.
+func SanitizeResults(results []*types.Result, maskFn func(string) string) []*types.Result {
+	if maskFn == nil {
+		maskFn = func(s string) string { return s }
+	}
+	out := make([]*types.Result, 0, len(results))
+	for _, r := range results {
+		if r == nil {
+			continue
+		}
+		cp := *r
+		cp.Url = maskFn(r.Url)
+		cp.Error = maskFn(r.Error)
+		cp.RequestBody = history.MaskJSONText(r.RequestBody, maskFn)
+		cp.Text = history.MaskJSONText(r.Text, maskFn)
+		if len(r.RequestHeaders) > 0 {
+			cp.RequestHeaders = make(map[string]string, len(r.RequestHeaders))
+			for k, v := range r.RequestHeaders {
+				if history.IsSensitiveHeader(k) {
+					cp.RequestHeaders[k] = "[MASKED]"
+				} else {
+					cp.RequestHeaders[k] = maskFn(v)
+				}
+			}
+		}
+		if len(r.Headers) > 0 {
+			cp.Headers = make(map[string]string, len(r.Headers))
+			for k, v := range r.Headers {
+				if history.IsSensitiveHeader(k) {
+					cp.Headers[k] = "[MASKED]"
+				} else {
+					cp.Headers[k] = maskFn(v)
+				}
+			}
+		}
+		if len(r.Captures) > 0 {
+			cp.Captures = make(map[string]any, len(r.Captures))
+			for k, v := range r.Captures {
+				if history.IsSensitiveKey(k) {
+					cp.Captures[k] = "[MASKED]"
+				} else if s, ok := v.(string); ok {
+					cp.Captures[k] = maskFn(s)
+				} else {
+					cp.Captures[k] = v
+				}
+			}
+		}
+		out = append(out, &cp)
+	}
+	return out
+}
 
 type HTMLReportStats struct {
 	Total      int
@@ -51,6 +104,7 @@ func GenerateHTMLReport(results []*types.Result, title string) string {
 	if title == "" {
 		title = "hit API Test Report"
 	}
+	results = SanitizeResults(results, nil)
 	stats := calculateStats(results)
 	passRate := 0.0
 	if stats.Total > 0 {

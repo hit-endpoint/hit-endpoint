@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/hit-endpoint/hit-endpoint/internal/assertions"
+	internalAuth "github.com/hit-endpoint/hit-endpoint/internal/auth"
 	"github.com/hit-endpoint/hit-endpoint/internal/history"
 	"github.com/hit-endpoint/hit-endpoint/internal/matrix"
 	"github.com/hit-endpoint/hit-endpoint/internal/spec"
@@ -24,6 +25,14 @@ import (
 	"github.com/hit-endpoint/hit-endpoint/internal/types"
 	"github.com/hit-endpoint/hit-endpoint/internal/zone"
 )
+
+func isSensitiveKey(k string) bool {
+	lk := strings.ToLower(strings.TrimSpace(k))
+	return lk == "token" || lk == "access_token" || lk == "refresh_token" || lk == "id_token" ||
+		lk == "password" || lk == "passwd" || lk == "secret" || lk == "client_secret" ||
+		lk == "api_key" || lk == "apikey" || lk == "cookie" || lk == "key" || lk == "jwt" || lk == "sid" ||
+		strings.Contains(lk, "token") || strings.Contains(lk, "secret") || strings.Contains(lk, "password") || strings.Contains(lk, "apikey") || strings.Contains(lk, "api_key")
+}
 
 var stepKeys = map[string]bool{
 	"vars": true, "captures": true, "tests": true, "headers": true,
@@ -102,6 +111,28 @@ func NewSession(opts SessionOptions) (*Session, error) {
 	for s := range server.Secrets {
 		secrets[s] = true
 	}
+	for k, v := range sessionVars {
+		if isSensitiveKey(k) {
+			if strVal, ok := v.(string); ok && len(strVal) >= 4 {
+				secrets[strVal] = true
+			}
+		}
+	}
+	for k, v := range cliVars {
+		if isSensitiveKey(k) {
+			if strVal, ok := v.(string); ok && len(strVal) >= 4 {
+				secrets[strVal] = true
+			}
+		}
+	}
+	if ga, err := internalAuth.LoadGlobalAuth(); err == nil && ga != nil {
+		if len(ga.Token) >= 4 {
+			secrets[ga.Token] = true
+		}
+		if len(ga.Cookie) >= 4 {
+			secrets[ga.Cookie] = true
+		}
+	}
 
 	var histStore *history.Store
 	if !opts.NoHistory {
@@ -153,23 +184,43 @@ func (s *Session) Context(requestVars map[string]any, stepVars map[string]any) *
 	for k, v := range s.FlowVars {
 		flowVarsCopy[k] = v
 	}
+	cliVarsCopy := make(map[string]any, len(s.CliVars))
+	for k, v := range s.CliVars {
+		cliVarsCopy[k] = v
+	}
+	serverVarsCopy := make(map[string]any)
+	if s.Server != nil {
+		serverVarsCopy = make(map[string]any, len(s.Server.Vars))
+		for k, v := range s.Server.Vars {
+			serverVarsCopy[k] = v
+		}
+	}
+	secretsCopy := make(map[string]bool, len(s.Secrets))
+	for k, v := range s.Secrets {
+		secretsCopy[k] = v
+	}
 	s.mu.RUnlock()
 
 	layers := []templating.Layer{
 		{Name: "zone", Values: wsVars},
-		{Name: "server", Values: s.Server.Vars},
+		{Name: "server", Values: serverVarsCopy},
 		{Name: "request", Values: requestVars},
 		{Name: "session", Values: sessionVarsCopy},
 		{Name: "flow", Values: flowVarsCopy},
 		{Name: "step", Values: stepVars},
-		{Name: "cli", Values: s.CliVars},
+		{Name: "cli", Values: cliVarsCopy},
 	}
-	return templating.NewContext(layers, s.Secrets)
+	return templating.NewContext(layers, secretsCopy)
 }
 
 func (s *Session) SetVar(name string, value any, persist *bool) {
 	s.mu.Lock()
 	s.SessionVars[name] = value
+	if isSensitiveKey(name) {
+		if strVal, ok := value.(string); ok && len(strVal) >= 4 {
+			s.Secrets[strVal] = true
+		}
+	}
 	s.mu.Unlock()
 
 	p := s.Persist
@@ -205,9 +256,27 @@ func (s *Session) Clone() *Session {
 	for k, v := range s.Secrets {
 		secrets[k] = v
 	}
+	var serverCopy *zone.Server
+	if s.Server != nil {
+		sVars := make(map[string]any, len(s.Server.Vars))
+		for k, v := range s.Server.Vars {
+			sVars[k] = v
+		}
+		sSecs := make(map[string]bool, len(s.Server.Secrets))
+		for k, v := range s.Server.Secrets {
+			sSecs[k] = v
+		}
+		serverCopy = &zone.Server{
+			Name:    s.Server.Name,
+			Vars:    sVars,
+			Auth:    s.Server.Auth,
+			Secrets: sSecs,
+			Path:    s.Server.Path,
+		}
+	}
 	return &Session{
 		Zone:           s.Zone,
-		Server:         s.Server,
+		Server:         serverCopy,
 		Persist:        false,
 		State:          nil,
 		SessionVars:    sessionVars,
@@ -286,7 +355,13 @@ func (s *Session) Client(verify any, timeoutSec float64) *http.Client {
 
 func (s *Session) Close() {
 	if s.Persist && s.State != nil {
-		s.State.Update(s.SessionVars)
+		s.mu.RLock()
+		varsCopy := make(map[string]any, len(s.SessionVars))
+		for k, v := range s.SessionVars {
+			varsCopy[k] = v
+		}
+		s.mu.RUnlock()
+		s.State.Update(varsCopy)
 		_ = s.State.Save()
 	}
 }
@@ -344,7 +419,7 @@ func (s *Session) Request(method, reqURL string, headers map[string]any, query m
 	}
 	if jsonBody != nil {
 		data["body"] = map[string]any{"json": jsonBody}
-	} else if form != nil {
+	} else if len(form) > 0 {
 		data["body"] = map[string]any{"form": form}
 	} else if body != nil {
 		data["body"] = body
@@ -440,24 +515,79 @@ func (s *Session) Prepare(sp *spec.RequestSpec, step map[string]any) (*spec.Requ
 	}
 
 	s.collectSecrets(rendered.Auth)
+	s.collectBodySecrets(rendered.Body)
+	s.collectBodySecrets(prepared.BodyPreview)
 	if rendered.Auth == nil || rendered.Auth == "inherit" {
-		if s.Server.Auth != nil {
+		if s.Server != nil && s.Server.Auth != nil {
 			rEnvAuth, _ := templating.Render(s.Server.Auth, ctx, false)
 			s.collectSecrets(rEnvAuth)
 		}
 	}
 
+	// Refresh context so ctx.Mask includes all secrets collected from auth and body
+	ctx = s.Context(curSpec.Vars, stepVars)
+
 	return rendered, prepared, ctx, nil
 }
 
 func (s *Session) collectSecrets(auth any) {
-	if am, ok := auth.(map[string]any); ok {
-		for _, k := range []string{"token", "password", "value"} {
-			if strVal, ok := am[k].(string); ok && len(strVal) >= 4 {
-				s.Secrets[strVal] = true
+	am, ok := auth.(map[string]any)
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, k := range []string{"token", "password", "value", "cookie", "secret", "key"} {
+		if strVal, ok := am[k].(string); ok && len(strVal) >= 4 {
+			s.Secrets[strVal] = true
+		}
+	}
+}
+
+func (s *Session) collectBodySecrets(body any) {
+	if body == nil {
+		return
+	}
+	var found []string
+	var walk func(v any)
+	walk = func(v any) {
+		switch val := v.(type) {
+		case map[string]any:
+			for k, item := range val {
+				if isSensitiveKey(k) {
+					if strVal, ok := item.(string); ok && len(strVal) >= 4 && !strings.Contains(strVal, "{{") {
+						found = append(found, strVal)
+					}
+				} else {
+					walk(item)
+				}
+			}
+		case []any:
+			for _, item := range val {
+				walk(item)
+			}
+		case string:
+			trimmed := strings.TrimSpace(val)
+			if strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}") {
+				var parsed map[string]any
+				if err := json.Unmarshal([]byte(trimmed), &parsed); err == nil {
+					walk(parsed)
+				}
 			}
 		}
 	}
+	walk(body)
+	if len(found) > 0 {
+		s.mu.Lock()
+		for _, sec := range found {
+			s.Secrets[sec] = true
+		}
+		s.mu.Unlock()
+	}
+}
+
+func (s *Session) Mask(text string) string {
+	return s.Context(nil, nil).Mask(text)
 }
 
 func (s *Session) RunSpec(sp *spec.RequestSpec, step map[string]any) *types.Result {
@@ -535,7 +665,8 @@ func (s *Session) runSingleSpec(sp *spec.RequestSpec, step map[string]any) *type
 	// Before hook
 	if beforeScript, ok := rendered.Hooks["before"]; ok && beforeScript != "" {
 		hookPath := s.hookPath(sp, beforeScript)
-		if err := runBeforeHook(hookPath, prepared, ctx); err != nil {
+		newVars, err := runBeforeHook(hookPath, prepared, ctx)
+		if err != nil {
 			r := &types.Result{
 				Name:   rendered.Name,
 				Ref:    ref,
@@ -545,6 +676,13 @@ func (s *Session) runSingleSpec(sp *spec.RequestSpec, step map[string]any) *type
 			}
 			s.recordResult(r)
 			return r
+		}
+		if len(newVars) > 0 {
+			s.mu.Lock()
+			for k, v := range newVars {
+				s.SessionVars[k] = v
+			}
+			s.mu.Unlock()
 		}
 	}
 
@@ -605,6 +743,12 @@ func (s *Session) runSingleSpec(sp *spec.RequestSpec, step map[string]any) *type
 	for k, v := range prepared.Headers {
 		req.Header.Set(k, v)
 	}
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", "hit/0.1.0")
+		if result.RequestHeaders != nil {
+			result.RequestHeaders["User-Agent"] = "hit/0.1.0"
+		}
+	}
 
 	start := time.Now()
 	resp, err := reqClient.Do(req)
@@ -642,6 +786,10 @@ func (s *Session) runSingleSpec(sp *spec.RequestSpec, step map[string]any) *type
 
 	root := result.Root()
 
+	if result.JSON != nil {
+		s.collectBodySecrets(result.JSON)
+	}
+
 	// Captures
 	for key, expr := range rendered.Captures {
 		val, err := assertions.Search(fmt.Sprintf("%v", expr), root)
@@ -656,6 +804,11 @@ func (s *Session) runSingleSpec(sp *spec.RequestSpec, step map[string]any) *type
 		result.Captures[key] = val
 		s.mu.Lock()
 		s.SessionVars[key] = val
+		if isSensitiveKey(key) || isSensitiveKey(fmt.Sprintf("%v", expr)) {
+			if strVal, ok := val.(string); ok && len(strVal) >= 4 {
+				s.Secrets[strVal] = true
+			}
+		}
 		s.mu.Unlock()
 	}
 
@@ -670,6 +823,11 @@ func (s *Session) runSingleSpec(sp *spec.RequestSpec, step map[string]any) *type
 		for k, v := range capturesUpdate {
 			s.SessionVars[k] = v
 			result.Captures[k] = v
+			if isSensitiveKey(k) {
+				if strVal, ok := v.(string); ok && len(strVal) >= 4 {
+					s.Secrets[strVal] = true
+				}
+			}
 		}
 		s.mu.Unlock()
 		result.Tests = append(result.Tests, testRes)
@@ -695,7 +853,7 @@ func (s *Session) runSingleSpec(sp *spec.RequestSpec, step map[string]any) *type
 		if sp != nil && sp.Path == "" {
 			source = "adhoc"
 		}
-		entry := history.NewEntryFromResult(result, source, zoneName, serverName, ctx.Mask)
+		entry := history.NewEntryFromResult(result, source, zoneName, serverName, s.Mask)
 		_ = s.HistoryStore.Append(entry)
 	}
 
@@ -754,38 +912,83 @@ func (s *Session) RunFolder(folder string, onResult func(*types.Result), failFas
 	return results
 }
 
-func runBeforeHook(hookPath string, prepared *spec.Prepared, ctx *templating.Context) error {
+func runBeforeHook(hookPath string, prepared *spec.Prepared, ctx *templating.Context) (map[string]any, error) {
 	if !strings.HasSuffix(hookPath, ".py") {
-		return nil
+		return nil, nil
 	}
-	// Run python script bridge
+	var bodyVal any
+	if len(prepared.Content) > 0 {
+		var parsed any
+		if err := json.Unmarshal(prepared.Content, &parsed); err == nil {
+			bodyVal = parsed
+		} else {
+			bodyVal = string(prepared.Content)
+		}
+	}
+
 	pythonCode := `
-import sys, json, importlib.util
+import sys, json, inspect, importlib.util
+real_out = sys.stdout
+sys.stdout = sys.stderr
 data = json.load(sys.stdin)
 path = sys.argv[1]
 spec = importlib.util.spec_from_file_location("hook", path)
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
-if hasattr(mod, "before"):
-    class Prep: pass
-    p = Prep()
-    p.method = data["method"]
-    p.url = data["url"]
-    p.headers = data["headers"]
-    p.params = data["params"]
-    class Ctx:
-        def __init__(self, m): self.m = m
-        def get(self, k, d=None): return self.m.get(k, d)
-        def set(self, k, v): self.m[k] = v
-    c = Ctx(data["context"])
-    mod.before(p, c)
-    json.dump({"headers": p.headers, "params": p.params, "context": c.m}, sys.stdout)
+class Ctx:
+    def __init__(self, m):
+        self.orig = dict(m)
+        self.m = dict(m)
+        self.vars = self.m
+    def get(self, k, d=None): return self.m.get(k, d)
+    def set(self, k, v): self.m[k] = v
+    def __getitem__(self, k): return self.m[k]
+    def __setitem__(self, k, v): self.m[k] = v
+c = Ctx(data.get("context") or {})
+class Prep:
+    def __init__(self):
+        self.method = data.get("method", "GET")
+        self.url = data.get("url", "")
+        self.headers = dict(data.get("headers") or {})
+        self.params = dict(data.get("params") or {})
+        self.body = data.get("body")
+        self.json = self.body
+        self.vars = c.m
+    def get(self, k, d=None): return c.get(k, d)
+    def set(self, k, v): c.set(k, v)
+    def __getitem__(self, k): return c.m[k]
+    def __setitem__(self, k, v): c.m[k] = v
+p = Prep()
+fn = getattr(mod, "before", None) or getattr(mod, "run", None)
+if fn is not None:
+    sig = inspect.signature(fn)
+    if len(sig.parameters) == 0:
+        fn()
+    elif len(sig.parameters) == 1:
+        fn(p)
+    else:
+        fn(p, c)
+body_out = p.body if p.body != data.get("body") else (p.json if p.json != data.get("body") else data.get("body"))
+body_changed = (body_out != data.get("body"))
+new_vars = {k: v for k, v in c.m.items() if k not in c.orig or c.orig[k] != v}
+headers_out = {str(k): str(v) for k, v in (p.headers or {}).items()}
+json.dump({
+    "method": str(p.method),
+    "url": str(p.url),
+    "headers": headers_out,
+    "params": p.params,
+    "body": body_out,
+    "body_changed": body_changed,
+    "context": c.m,
+    "new_vars": new_vars,
+}, real_out)
 `
 	inputData := map[string]any{
 		"method":  prepared.Method,
 		"url":     prepared.Url,
 		"headers": prepared.Headers,
 		"params":  prepared.Params,
+		"body":    bodyVal,
 		"context": ctx.Flat(),
 	}
 	inputBytes, _ := json.Marshal(inputData)
@@ -797,26 +1000,56 @@ if hasattr(mod, "before"):
 	cmd.Stderr = &errBuf
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("%v: %s", err, errBuf.String())
+		return nil, fmt.Errorf("%v: %s", err, strings.TrimSpace(errBuf.String()))
 	}
 
 	var outputData struct {
-		Headers map[string]string `json:"headers"`
-		Params  map[string]any    `json:"params"`
-		Context map[string]any    `json:"context"`
+		Method      string            `json:"method"`
+		Url         string            `json:"url"`
+		Headers     map[string]string `json:"headers"`
+		Params      map[string]any    `json:"params"`
+		Body        any               `json:"body"`
+		BodyChanged bool              `json:"body_changed"`
+		Context     map[string]any    `json:"context"`
+		NewVars     map[string]any    `json:"new_vars"`
 	}
-	if err := json.Unmarshal(outBuf.Bytes(), &outputData); err == nil {
-		if outputData.Headers != nil {
-			prepared.Headers = outputData.Headers
-		}
-		if outputData.Params != nil {
-			prepared.Params = outputData.Params
-		}
-		for k, v := range outputData.Context {
-			ctx.Set(k, v)
+	if err := json.Unmarshal(outBuf.Bytes(), &outputData); err != nil {
+		return nil, fmt.Errorf("invalid before hook output: %w", err)
+	}
+	if outputData.Method != "" {
+		prepared.Method = outputData.Method
+	}
+	if outputData.Url != "" {
+		prepared.Url = outputData.Url
+	}
+	if outputData.Headers != nil {
+		prepared.Headers = outputData.Headers
+	}
+	if outputData.Params != nil {
+		prepared.Params = outputData.Params
+	}
+	if outputData.BodyChanged {
+		switch b := outputData.Body.(type) {
+		case nil:
+			prepared.Content = nil
+			prepared.BodyPreview = ""
+		case string:
+			prepared.Content = []byte(b)
+			prepared.BodyPreview = b
+		default:
+			if jb, err := json.Marshal(b); err == nil {
+				prepared.Content = jb
+				prepared.BodyPreview = string(jb)
+				if _, hasCT := prepared.Headers["Content-Type"]; !hasCT {
+					prepared.Headers["Content-Type"] = "application/json"
+				}
+			}
 		}
 	}
-	return nil
+	for k, v := range outputData.Context {
+		ctx.Set(k, v)
+	}
+	return outputData.NewVars, nil
 }
 
 func runAfterHook(hookPath string, result *types.Result, ctx *templating.Context) (assertions.TestResult, map[string]any) {
@@ -828,35 +1061,54 @@ func runAfterHook(hookPath string, result *types.Result, ctx *templating.Context
 	}
 
 	pythonCode := `
-import sys, json, importlib.util
+import sys, json, inspect, importlib.util
+real_out = sys.stdout
+sys.stdout = sys.stderr
 data = json.load(sys.stdin)
 path = sys.argv[1]
 spec = importlib.util.spec_from_file_location("hook", path)
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
-if hasattr(mod, "after"):
-    class Res: pass
-    r = Res()
-    r.status = data["status"]
-    r.headers = data["headers"]
-    r.json = data["json"]
-    r.text = data["text"]
-    r.elapsed_ms = data["elapsed_ms"]
-    class Ctx:
-        def __init__(self, m):
-            self.orig = dict(m)
-            self.curr = dict(m)
-        def get(self, k, d=None): return self.curr.get(k, d)
-        def set(self, k, v): self.curr[k] = v
-    c = Ctx(data["context"])
+class Ctx:
+    def __init__(self, m):
+        self.orig = dict(m)
+        self.curr = dict(m)
+        self.vars = self.curr
+    def get(self, k, d=None): return self.curr.get(k, d)
+    def set(self, k, v): self.curr[k] = v
+    def __getitem__(self, k): return self.curr[k]
+    def __setitem__(self, k, v): self.curr[k] = v
+c = Ctx(data.get("context") or {})
+class Res:
+    def __init__(self):
+        self.status = data["status"]
+        self.headers = data["headers"]
+        self.json = data["json"]
+        self.text = data["text"]
+        self.body = self.json if self.json is not None else self.text
+        self.elapsed_ms = data["elapsed_ms"]
+        self.vars = c.curr
+    def get(self, k, d=None): return c.get(k, d)
+    def set(self, k, v): c.set(k, v)
+r = Res()
+fn = getattr(mod, "after", None) or getattr(mod, "run", None)
+if fn is not None:
     try:
-        mod.after(r, c)
+        sig = inspect.signature(fn)
+        if len(sig.parameters) == 0:
+            fn()
+        elif len(sig.parameters) == 1:
+            fn(r)
+        else:
+            fn(r, c)
         new_vars = {k: v for k, v in c.curr.items() if k not in c.orig or c.orig[k] != v}
-        json.dump({"ok": True, "new_vars": new_vars}, sys.stdout)
+        json.dump({"ok": True, "new_vars": new_vars}, real_out)
     except AssertionError as exc:
-        json.dump({"ok": False, "error": str(exc) or "assertion failed"}, sys.stdout)
+        json.dump({"ok": False, "error": str(exc) or "assertion failed"}, real_out)
     except Exception as exc:
-        json.dump({"ok": False, "error": f"{exc.__class__.__name__}: {exc}"}, sys.stdout)
+        json.dump({"ok": False, "error": f"{exc.__class__.__name__}: {exc}"}, real_out)
+else:
+    json.dump({"ok": True, "new_vars": {}}, real_out)
 `
 	inputData := map[string]any{
 		"status":     result.Status,

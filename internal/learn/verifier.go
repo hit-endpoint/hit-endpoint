@@ -60,6 +60,27 @@ func NewVerifier(z *zone.Zone, mockURL string) *Verifier {
 	}
 	mockURL = strings.TrimRight(mockURL, "/")
 
+	isSandboxEntry := func(e *history.Entry, fromZone bool) bool {
+		if e == nil {
+			return false
+		}
+		if fromZone {
+			return true
+		}
+		if e.Source == "flow" || e.Source == "chain" || e.Source == "perf" {
+			return true
+		}
+		u := strings.ToLower(e.Url)
+		m := strings.ToLower(mockURL)
+		if m != "" && strings.HasPrefix(u, m) {
+			return true
+		}
+		if strings.Contains(u, "127.0.0.1:8765") || strings.Contains(u, "localhost:8765") {
+			return true
+		}
+		return false
+	}
+
 	var entries []*history.Entry
 	// 1. Check zone history
 	var zoneRoot string
@@ -69,15 +90,40 @@ func NewVerifier(z *zone.Zone, mockURL string) *Verifier {
 	histPath := history.GetHistoryPath(zoneRoot)
 	store := history.NewStore(histPath)
 	if e, err := store.List(500, 0, "", ""); err == nil {
-		entries = append(entries, e...)
+		for _, item := range e {
+			if isSandboxEntry(item, z != nil) {
+				entries = append(entries, item)
+			}
+		}
 	}
 
-	// 2. Also check global ~/.hit/history.jsonl if zone history is empty or distinct
+	// 2. If no zone was explicitly provided, also check examples/petstore-zone history when targeting local mock port
+	if z == nil && (strings.Contains(mockURL, "8765")) {
+		for _, candidate := range []string{"examples/petstore-zone", "../../examples/petstore-zone", "../examples/petstore-zone"} {
+			candHist := history.GetHistoryPath(candidate)
+			if candHist != histPath {
+				if ce, err := history.NewStore(candHist).List(500, 0, "", ""); err == nil {
+					for _, item := range ce {
+						if isSandboxEntry(item, true) {
+							entries = append(entries, item)
+						}
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// 3. Also check global ~/.hit/history.jsonl if distinct from zone history
 	globalPath := history.GetHistoryPath("")
 	if globalPath != histPath {
 		globalStore := history.NewStore(globalPath)
 		if ge, err := globalStore.List(500, 0, "", ""); err == nil {
-			entries = append(entries, ge...)
+			for _, item := range ge {
+				if isSandboxEntry(item, false) {
+					entries = append(entries, item)
+				}
+			}
 		}
 	}
 
@@ -203,10 +249,10 @@ func (v *Verifier) verifyLesson1(res *LessonResult) {
 
 // Lesson 2: Parameters, Payloads & Content Negotiation
 func (v *Verifier) verifyLesson2(res *LessonResult) {
-	// Check 1: Query parameter sent (e.g. GET /pets?kind=...)
+	// Check 1: Query parameter sent (e.g. GET /pets?kind=... or GET /echo?...)
 	hasQuery := false
 	for _, e := range v.history {
-		if e.Method == "GET" && strings.Contains(e.Url, "/pets") && strings.Contains(e.Url, "?") {
+		if e.Method == "GET" && (strings.Contains(e.Url, "/pets") || strings.Contains(e.Url, "/echo")) && strings.Contains(e.Url, "?") {
 			hasQuery = true
 			break
 		}
@@ -214,14 +260,14 @@ func (v *Verifier) verifyLesson2(res *LessonResult) {
 	res.Checks = append(res.Checks, CheckItem{
 		Description: "Filtered resources using query parameters (GET /pets?kind=...)",
 		Passed:      hasQuery,
-		Detail:      ternary(hasQuery, "Query filter found in history", "No GET /pets request with query parameters found"),
+		Detail:      ternary(hasQuery, "Query filter found in history", "No GET /pets or /echo request with query parameters found"),
 	})
 
-	// Check 2: JSON body sent (e.g. POST /pets with body)
+	// Check 2: JSON body sent (e.g. POST /pets or POST /echo with body)
 	hasPostPet := false
 	for _, e := range v.history {
-		if e.Method == "POST" && strings.Contains(e.Url, "/pets") && (e.Status == 200 || e.Status == 201) {
-			if strings.Contains(e.Body, "name") || strings.Contains(e.Body, "kind") {
+		if e.Method == "POST" && (strings.Contains(e.Url, "/pets") || strings.Contains(e.Url, "/echo")) && (e.Status == 200 || e.Status == 201) {
+			if strings.Contains(e.Body, "name") || strings.Contains(e.Body, "kind") || strings.TrimSpace(e.Body) != "" {
 				hasPostPet = true
 				break
 			}
@@ -234,7 +280,7 @@ func (v *Verifier) verifyLesson2(res *LessonResult) {
 	})
 
 	if !res.Passed {
-		res.Hint = fmt.Sprintf("Try: `hit GET %s/pets -q kind=dog` and `hit POST %s/pets -j '{\"name\":\"Bella\",\"kind\":\"dog\",\"age\":2}'`", v.mockURL, v.mockURL)
+		res.Hint = fmt.Sprintf("Try: `hit GET %s/pets -q kind=dog --auth bearer:demo-token-123` and `hit POST %s/pets --auth bearer:demo-token-123 -j '{\"name\":\"Bella\",\"kind\":\"dog\",\"age\":2}'`", v.mockURL, v.mockURL)
 	}
 }
 
@@ -276,7 +322,7 @@ func (v *Verifier) verifyLesson3(res *LessonResult) {
 	})
 
 	if !res.Passed {
-		res.Hint = fmt.Sprintf("Try: `hit POST %s/auth/login -j '{\"username\":\"admin\"}'` then `hit GET %s/pets -H \"Authorization: Bearer demo-token-123\"`", v.mockURL, v.mockURL)
+		res.Hint = fmt.Sprintf("Try: `hit POST %s/auth/login -j '{\"username\":\"admin\",\"password\":\"hunter2\"}'` then `hit GET %s/pets -H \"Authorization: Bearer demo-token-123\"`", v.mockURL, v.mockURL)
 	}
 }
 
@@ -376,13 +422,13 @@ func (v *Verifier) verifyLesson5(res *LessonResult) {
 	})
 
 	res.Checks = append(res.Checks, CheckItem{
-		Description: "Executed multi-step scenario flow (hit run flows/<flow>.yaml)",
-		Passed:      hasFlowRun || hasFlowFiles,
-		Detail:      ternary(hasFlowRun, "Flow execution recorded in history", "Flow files detected in zone"),
+		Description: "Executed multi-step scenario flow (hit run chains/<flow>.yaml)",
+		Passed:      hasFlowRun,
+		Detail:      ternary(hasFlowRun, "Flow execution recorded in history", "No scenario flow execution found in history"),
 	})
 
 	if !res.Passed {
-		res.Hint = "Run `hit -z examples/petstore-zone run flows/smoke.yaml`"
+		res.Hint = "Run `hit -z examples/petstore-zone run chains/smoke.yaml`"
 	}
 }
 
@@ -409,12 +455,18 @@ func (v *Verifier) verifyLesson6(res *LessonResult) {
 		Detail:      zDetail,
 	})
 
-	// Check 2: Historical requests or benchmark readiness
-	hasHistory := len(v.history) >= 2
+	// Check 2: Perf benchmark run recorded in history
+	hasPerfRun := false
+	for _, e := range v.history {
+		if e.Source == "perf" || strings.EqualFold(e.Method, "PERF") {
+			hasPerfRun = true
+			break
+		}
+	}
 	res.Checks = append(res.Checks, CheckItem{
 		Description: "Benchmarked endpoints with concurrent virtual users (hit perf)",
-		Passed:      hasHistory,
-		Detail:      ternary(hasHistory, fmt.Sprintf("%d requests recorded across test history", len(v.history)), "Run a load test with hit perf"),
+		Passed:      hasPerfRun,
+		Detail:      ternary(hasPerfRun, "Load test benchmark recorded in history", "Run a load test with hit perf"),
 	})
 
 	if !res.Passed {

@@ -88,10 +88,31 @@ func (c *Context) Layer(name string) map[string]any {
 	return nil
 }
 
+func lookupNestedMap(m map[string]any, parts []string) (any, bool) {
+	var curr any = m
+	for _, p := range parts {
+		cm, ok := curr.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		val, exists := cm[p]
+		if !exists {
+			return nil, false
+		}
+		curr = val
+	}
+	return curr, true
+}
+
 func (c *Context) Lookup(name string) (any, bool) {
 	for i := len(c.Layers) - 1; i >= 0; i-- {
 		if val, ok := c.Layers[i].Values[name]; ok {
 			return val, true
+		}
+		if strings.Contains(name, ".") {
+			if val, ok := lookupNestedMap(c.Layers[i].Values, strings.Split(name, ".")); ok {
+				return val, true
+			}
 		}
 	}
 	return nil, false
@@ -127,6 +148,11 @@ func (c *Context) SourceOf(name string) string {
 	for i := len(c.Layers) - 1; i >= 0; i-- {
 		if _, ok := c.Layers[i].Values[name]; ok {
 			return c.Layers[i].Name
+		}
+		if strings.Contains(name, ".") {
+			if _, ok := lookupNestedMap(c.Layers[i].Values, strings.Split(name, ".")); ok {
+				return c.Layers[i].Name
+			}
 		}
 	}
 	return ""

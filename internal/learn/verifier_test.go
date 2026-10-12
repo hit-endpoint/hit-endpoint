@@ -97,12 +97,29 @@ func TestLessonVerifier(t *testing.T) {
 		t.Errorf("expected Lesson 5 to pass, got failed checks: %+v", l5.Checks)
 	}
 
+	// Verify Lesson 6 fails before a perf run, then passes once a perf run is in history
+	l6Before := v.VerifyLesson(6)
+	if l6Before.Passed {
+		t.Errorf("expected Lesson 6 to fail before perf run, got passed")
+	}
+	v.history = append(v.history, &history.Entry{
+		Source: "perf",
+		Ref:    "petstore/00-health",
+		Method: "GET",
+		Url:    ts.URL + "/health",
+		Status: 200,
+	})
+	l6After := v.VerifyLesson(6)
+	if !l6After.Passed {
+		t.Errorf("expected Lesson 6 to pass after perf run, got failed checks: %+v", l6After.Checks)
+	}
+
 	// Verify All
 	report := v.VerifyAll()
 	if report.TotalLessons != 7 {
 		t.Errorf("expected 7 total lessons, got %d", report.TotalLessons)
 	}
-	if report.CompletedLessons < 5 {
-		t.Errorf("expected at least 5 completed lessons, got %d", report.CompletedLessons)
+	if report.CompletedLessons < 6 {
+		t.Errorf("expected at least 6 completed lessons, got %d", report.CompletedLessons)
 	}
 }

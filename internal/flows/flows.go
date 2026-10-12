@@ -170,7 +170,10 @@ func RunFlow(
 				_ = session.State.Save()
 			}
 			say(fmt.Sprintf("set %s", strings.Join(parts, ", ")))
-		} else if scriptVal, ok := step["python"]; ok {
+		} else if scriptVal, hasPython := step["python"]; hasPython || step["script"] != nil {
+			if !hasPython {
+				scriptVal = step["script"]
+			}
 			scriptPath := fmt.Sprintf("%v", scriptVal)
 			resolvedPath := resolveScriptPath(scriptPath, baseDir, session.Zone)
 			funcName := "run"
@@ -261,24 +264,39 @@ func resolveScriptPath(p string, baseDir string, z *zone.Zone) string {
 
 func runPythonStep(scriptPath, funcName string, session *runner.Session) (string, error) {
 	pythonCode := fmt.Sprintf(`
-import sys, json, importlib.util
+import sys, json, inspect, importlib.util
+real_out = sys.stdout
+sys.stdout = sys.stderr
+vars_in = json.load(sys.stdin)
 path = sys.argv[1]
 fn_name = %q
 spec = importlib.util.spec_from_file_location("flow_step", path)
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 fn = getattr(mod, fn_name, None)
-if fn is None:
-    sys.exit(1)
-# Proxy session if needed
+if fn is None and fn_name == "run":
+    for alt in ("main", "step"):
+        fn = getattr(mod, alt, None)
+        if fn is not None:
+            break
 class DummySession:
     def __init__(self, vars_map):
-        self.v = vars_map
+        self.v = dict(vars_map)
+        self.vars = self.v
     def get(self, k, d=None): return self.v.get(k, d)
     def set(self, k, v): self.v[k] = v
-ret = fn(DummySession(json.load(sys.stdin)))
-if ret is not None:
-    print(str(ret), end="")
+    def __getitem__(self, k): return self.v[k]
+    def __setitem__(self, k, v): self.v[k] = v
+s = DummySession(vars_in)
+ret = None
+if fn is not None:
+    sig = inspect.signature(fn)
+    if len(sig.parameters) == 0:
+        ret = fn()
+    else:
+        ret = fn(s)
+new_vars = {k: v for k, v in s.v.items() if k not in vars_in or vars_in[k] != v}
+json.dump({"outcome": str(ret) if ret is not None else "", "new_vars": new_vars}, real_out)
 `, funcName)
 
 	inputBytes, _ := json.Marshal(session.Variables())
@@ -289,7 +307,21 @@ if ret is not None:
 	cmd.Stderr = &errBuf
 
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("hook %s failed: %s %v", filepath.Base(scriptPath), errBuf.String(), err)
+		return "", fmt.Errorf("hook %s failed: %s %v", filepath.Base(scriptPath), strings.TrimSpace(errBuf.String()), err)
+	}
+	var res struct {
+		Outcome string         `json:"outcome"`
+		NewVars map[string]any `json:"new_vars"`
+	}
+	if err := json.Unmarshal(outBuf.Bytes(), &res); err == nil {
+		for k, v := range res.NewVars {
+			noPersist := false
+			session.SetVar(k, v, &noPersist)
+		}
+		if session.Persist && session.State != nil && len(res.NewVars) > 0 {
+			_ = session.State.Save()
+		}
+		return strings.TrimSpace(res.Outcome), nil
 	}
 	return strings.TrimSpace(outBuf.String()), nil
 }

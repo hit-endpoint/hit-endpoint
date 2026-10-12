@@ -51,6 +51,7 @@ func TestHandleStateTransition_TriggerAndResolve(t *testing.T) {
 	var pagerDutyActions []string
 	var slackCalls int
 	var opsgenieActions []string
+	var webhookActions []string
 
 	client := &http.Client{
 		Transport: roundTripFunc(func(req *http.Request) *http.Response {
@@ -75,6 +76,13 @@ func TestHandleStateTransition_TriggerAndResolve(t *testing.T) {
 				}
 				return &http.Response{StatusCode: 202, Body: io.NopCloser(bytes.NewBufferString(`{"result":"Request will be processed"}`))}
 			}
+			if req.URL.Host == "webhook.example.com" {
+				var wh WebhookPayload
+				b, _ := io.ReadAll(req.Body)
+				_ = json.Unmarshal(b, &wh)
+				webhookActions = append(webhookActions, wh.Action)
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewBufferString(`{"ok":true}`))}
+			}
 			return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewBufferString(`ok`))}
 		}),
 	}
@@ -87,6 +95,7 @@ func TestHandleStateTransition_TriggerAndResolve(t *testing.T) {
 			PagerDuty: &PagerDutyConfig{RoutingKey: "pd_mock_routing_key"},
 			Slack:     &SlackConfig{WebhookURL: "https://hooks.slack.com/services/mock"},
 			Opsgenie:  &OpsgenieConfig{APIKey: "genie_mock_key"},
+			Webhook:   &WebhookConfig{URL: "https://webhook.example.com/alerts"},
 		},
 	}
 
@@ -134,6 +143,9 @@ func TestHandleStateTransition_TriggerAndResolve(t *testing.T) {
 	if len(opsgenieActions) != 1 || opsgenieActions[0] != "create" {
 		t.Errorf("expected Opsgenie create, got %v", opsgenieActions)
 	}
+	if len(webhookActions) != 1 || webhookActions[0] != "trigger" {
+		t.Errorf("expected Webhook trigger, got %v", webhookActions)
+	}
 
 	// 3. Third check: Healthy -> Auto-Resolve alert
 	healthCheck := &ProbeCheckResult{
@@ -155,5 +167,8 @@ func TestHandleStateTransition_TriggerAndResolve(t *testing.T) {
 	}
 	if len(opsgenieActions) != 2 || opsgenieActions[1] != "resolve" {
 		t.Errorf("expected Opsgenie resolve, got %v", opsgenieActions)
+	}
+	if len(webhookActions) != 2 || webhookActions[1] != "resolve" {
+		t.Errorf("expected Webhook resolve, got %v", webhookActions)
 	}
 }

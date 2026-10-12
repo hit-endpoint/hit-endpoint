@@ -251,7 +251,17 @@ func (c *ScriptConverter) Convert() {
 
 	for _, line := range c.Lines {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || trimmed == "});" || trimmed == "}" || trimmed == "var jsonData = pm.response.json();" {
+		if trimmed == "" || trimmed == "});" || trimmed == "}" || trimmed == "{" ||
+			trimmed == "var jsonData = pm.response.json();" ||
+			trimmed == "const jsonData = pm.response.json();" ||
+			trimmed == "let jsonData = pm.response.json();" ||
+			strings.HasPrefix(trimmed, "//") ||
+			strings.HasPrefix(trimmed, "/*") ||
+			strings.HasPrefix(trimmed, "*") ||
+			strings.HasPrefix(trimmed, "console.log(") ||
+			strings.HasPrefix(trimmed, "console.info(") ||
+			strings.HasPrefix(trimmed, "console.warn(") ||
+			strings.HasPrefix(trimmed, "console.error(") {
 			continue
 		}
 

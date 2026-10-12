@@ -269,3 +269,64 @@ func SendOpsgenie(client *http.Client, endpoint, apiKey, action, alias, message,
 
 	return nil
 }
+
+// WebhookPayload represents the JSON payload sent to a generic webhook endpoint.
+type WebhookPayload struct {
+	Action      string            `json:"action"` // "trigger", "resolve", "test"
+	ProbeName   string            `json:"probe_name"`
+	Summary     string            `json:"summary"`
+	DedupKey    string            `json:"dedup_key,omitempty"`
+	Timestamp   string            `json:"timestamp"`
+	Details     []string          `json:"details,omitempty"`
+	CheckResult *ProbeCheckResult `json:"check_result,omitempty"`
+}
+
+// SendWebhook dispatches a JSON incident/resolution payload to a generic webhook URL.
+func SendWebhook(client *http.Client, webhookURL, action, probeName, summary, dedupKey string, checkResult *ProbeCheckResult, details []string) error {
+	resolvedURL := ResolveSecret(webhookURL)
+	if resolvedURL == "" {
+		return fmt.Errorf("webhook URL is empty or unresolved")
+	}
+	if client == nil {
+		client = &http.Client{Timeout: 5 * time.Second}
+	}
+
+	payload := WebhookPayload{
+		Action:      action,
+		ProbeName:   probeName,
+		Summary:     summary,
+		DedupKey:    dedupKey,
+		Timestamp:   time.Now().UTC().Format(time.RFC3339),
+		Details:     details,
+		CheckResult: checkResult,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal webhook payload: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, resolvedURL, bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("failed to create webhook request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "hit/0.1.0 (synthetic-probe)")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("webhook request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return fmt.Errorf("webhook returned HTTP %d: %s", resp.StatusCode, string(snippet))
+	}
+
+	return nil
+}
+

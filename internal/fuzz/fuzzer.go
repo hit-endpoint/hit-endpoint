@@ -32,17 +32,29 @@ type Anomaly struct {
 	Severity     string  `json:"severity"` // "CRITICAL", "HIGH", "MEDIUM"
 }
 
+// MutationResult records the outcome of an individual fuzz mutation.
+type MutationResult struct {
+	Name       string  `json:"name"`
+	Category   string  `json:"category"`
+	Method     string  `json:"method"`
+	URL        string  `json:"url"`
+	StatusCode int     `json:"status_code"`
+	DurationMs float64 `json:"duration_ms"`
+	Error      string  `json:"error,omitempty"`
+}
+
 // FuzzResult aggregates the execution metrics and detected vulnerabilities.
 type FuzzResult struct {
-	TargetMethod    string    `json:"target_method"`
-	TargetURL       string    `json:"target_url"`
-	TotalMutations  int       `json:"total_mutations"`
-	Handled4xx      int       `json:"handled_4xx"`
-	Success2xx      int       `json:"success_2xx"`
-	ServerErrors5xx int       `json:"server_errors_5xx"`
-	TransportErrors int       `json:"transport_errors"`
-	Anomalies       []Anomaly `json:"anomalies"`
-	ElapsedMs       float64   `json:"elapsed_ms"`
+	TargetMethod    string           `json:"target_method"`
+	TargetURL       string           `json:"target_url"`
+	TotalMutations  int              `json:"total_mutations"`
+	Handled4xx      int              `json:"handled_4xx"`
+	Success2xx      int              `json:"success_2xx"`
+	ServerErrors5xx int              `json:"server_errors_5xx"`
+	TransportErrors int              `json:"transport_errors"`
+	Anomalies       []Anomaly        `json:"anomalies"`
+	Mutations       []MutationResult `json:"mutations"`
+	ElapsedMs       float64          `json:"elapsed_ms"`
 }
 
 // Run executes the fuzzer against the target endpoint using the synthesized mutation suite.
@@ -67,7 +79,19 @@ func Run(method, rawURL string, headers map[string]string, query map[string]stri
 		TargetMethod:   method,
 		TargetURL:      rawURL,
 		TotalMutations: len(mutations),
+		Anomalies:      []Anomaly{},
+		Mutations:      []MutationResult{},
 	}
+
+	hasBaselineAuth := false
+	for k := range headers {
+		if strings.EqualFold(k, "Authorization") {
+			hasBaselineAuth = true
+			break
+		}
+	}
+	upperMethod := strings.ToUpper(strings.TrimSpace(method))
+	isWriteEndpoint := upperMethod == "POST" || upperMethod == "PUT" || upperMethod == "PATCH" || upperMethod == "DELETE"
 
 	startTime := time.Now()
 
@@ -80,6 +104,13 @@ func Run(method, rawURL string, headers map[string]string, query map[string]stri
 		req, err := http.NewRequest(m.Method, m.URL, reqBody)
 		if err != nil {
 			result.TransportErrors++
+			result.Mutations = append(result.Mutations, MutationResult{
+				Name:     m.Name,
+				Category: m.Category,
+				Method:   m.Method,
+				URL:      m.URL,
+				Error:    err.Error(),
+			})
 			continue
 		}
 
@@ -93,7 +124,6 @@ func Run(method, rawURL string, headers map[string]string, query map[string]stri
 
 		if err != nil {
 			result.TransportErrors++
-			// Flag connection reset or timeout as anomaly
 			issue := "Transport error: " + err.Error()
 			severity := "HIGH"
 			if strings.Contains(err.Error(), "timeout") {
@@ -107,6 +137,14 @@ func Run(method, rawURL string, headers map[string]string, query map[string]stri
 				Issue:        issue,
 				Severity:     severity,
 			})
+			result.Mutations = append(result.Mutations, MutationResult{
+				Name:       m.Name,
+				Category:   m.Category,
+				Method:     m.Method,
+				URL:        m.URL,
+				DurationMs: reqElapsed,
+				Error:      err.Error(),
+			})
 			if opts.OnMutation != nil {
 				opts.OnMutation(m, 0, reqElapsed, err)
 			}
@@ -115,10 +153,20 @@ func Run(method, rawURL string, headers map[string]string, query map[string]stri
 
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
-		bodyPreview := string(bodyBytes)
+		fullBody := string(bodyBytes)
+		bodyPreview := fullBody
 		if len(bodyPreview) > 200 {
 			bodyPreview = bodyPreview[:200] + "..."
 		}
+
+		result.Mutations = append(result.Mutations, MutationResult{
+			Name:       m.Name,
+			Category:   m.Category,
+			Method:     m.Method,
+			URL:        m.URL,
+			StatusCode: resp.StatusCode,
+			DurationMs: reqElapsed,
+		})
 
 		if resp.StatusCode >= 500 {
 			result.ServerErrors5xx++
@@ -135,6 +183,43 @@ func Run(method, rawURL string, headers map[string]string, query map[string]stri
 			result.Handled4xx++
 		} else if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			result.Success2xx++
+			if strings.Contains(m.Name, "Corrupted Bearer token") && hasBaselineAuth {
+				result.Anomalies = append(result.Anomalies, Anomaly{
+					MutationName: m.Name,
+					Category:     m.Category,
+					StatusCode:   resp.StatusCode,
+					DurationMs:   reqElapsed,
+					ResponseBody: bodyPreview,
+					Issue:        fmt.Sprintf("Authentication bypass: endpoint accepted corrupted Bearer token with HTTP %d", resp.StatusCode),
+					Severity:     "HIGH",
+				})
+			} else if m.Category == "injection" && (isWriteEndpoint || strings.Contains(fullBody, "<script>alert(1)</script>") || strings.Contains(fullBody, "onload=alert(1)") || strings.Contains(fullBody, "root:x:")) {
+				sev := "MEDIUM"
+				issue := fmt.Sprintf("Endpoint accepted injection payload without validation rejection (HTTP %d)", resp.StatusCode)
+				if strings.Contains(fullBody, "<script>alert(1)</script>") || strings.Contains(fullBody, "onload=alert(1)") {
+					sev = "HIGH"
+					issue = fmt.Sprintf("Reflected XSS / unescaped script payload in HTTP %d response", resp.StatusCode)
+				}
+				result.Anomalies = append(result.Anomalies, Anomaly{
+					MutationName: m.Name,
+					Category:     m.Category,
+					StatusCode:   resp.StatusCode,
+					DurationMs:   reqElapsed,
+					ResponseBody: bodyPreview,
+					Issue:        issue,
+					Severity:     sev,
+				})
+			} else if isWriteEndpoint && (m.Category == "types" || strings.Contains(m.Name, "10,000 'A's") || strings.Contains(m.Name, "Embedded null byte") || strings.Contains(m.Name, "Empty JSON object") || strings.Contains(m.Name, "Unexpected properties")) {
+				result.Anomalies = append(result.Anomalies, Anomaly{
+					MutationName: m.Name,
+					Category:     m.Category,
+					StatusCode:   resp.StatusCode,
+					DurationMs:   reqElapsed,
+					ResponseBody: bodyPreview,
+					Issue:        fmt.Sprintf("Missing input validation: endpoint accepted %s with HTTP %d", m.Name, resp.StatusCode),
+					Severity:     "MEDIUM",
+				})
+			}
 		}
 
 		if opts.OnMutation != nil {
@@ -145,3 +230,4 @@ func Run(method, rawURL string, headers map[string]string, query map[string]stri
 	result.ElapsedMs = float64(time.Since(startTime).Milliseconds())
 	return result, nil
 }
+

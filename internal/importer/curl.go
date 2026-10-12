@@ -34,7 +34,29 @@ func ImportCurl(curlInput string, targetDir string, nameOverride string) (*Impor
 	rawURL := ""
 	headers := make(map[string]any)
 	bodyStr := ""
-	authMap := make(map[string]any)
+	formFields := make(map[string]any)
+	var authMap map[string]any
+	hasExplicitAuthHeader := false
+	forceGet := false
+	extractedSecrets := make(map[string]string)
+
+	addDataUrlencode := func(val string) {
+		if idx := strings.Index(val, "="); idx > 0 {
+			formFields[val[:idx]] = val[idx+1:]
+		} else if idx == 0 {
+			if bodyStr != "" {
+				bodyStr += "&" + url.QueryEscape(val[1:])
+			} else {
+				bodyStr = url.QueryEscape(val[1:])
+			}
+		} else {
+			if bodyStr != "" {
+				bodyStr += "&" + val
+			} else {
+				bodyStr = val
+			}
+		}
+	}
 
 	for i := startIndex; i < len(tokens); i++ {
 		t := tokens[i]
@@ -42,15 +64,32 @@ func ImportCurl(curlInput string, targetDir string, nameOverride string) (*Impor
 		case (t == "-X" || t == "--request") && i+1 < len(tokens):
 			method = strings.ToUpper(tokens[i+1])
 			i++
+		case strings.HasPrefix(t, "--request="):
+			method = strings.ToUpper(strings.TrimPrefix(t, "--request="))
+		case t == "-G" || t == "--get":
+			forceGet = true
 		case (t == "-H" || t == "--header") && i+1 < len(tokens):
 			h := tokens[i+1]
 			idx := strings.Index(h, ":")
 			if idx > 0 {
 				k := strings.TrimSpace(h[:idx])
 				v := strings.TrimSpace(h[idx+1:])
-				if strings.EqualFold(k, "Authorization") && strings.HasPrefix(v, "Bearer ") {
-					authMap["type"] = "bearer"
-					authMap["token"] = strings.TrimPrefix(v, "Bearer ")
+				if strings.EqualFold(k, "Authorization") {
+					hasExplicitAuthHeader = true
+					if strings.HasPrefix(v, "Bearer ") || strings.HasPrefix(v, "bearer ") {
+						tok := strings.TrimSpace(v[7:])
+						if !strings.HasPrefix(tok, "{{") && !strings.HasPrefix(tok, "$env:") {
+							extractedSecrets["token"] = tok
+							tok = "{{token}}"
+						}
+						authMap = map[string]any{
+							"type":  "bearer",
+							"token": tok,
+						}
+					} else {
+						authMap = nil
+						headers[k] = v
+					}
 				} else {
 					headers[k] = v
 				}
@@ -59,15 +98,52 @@ func ImportCurl(curlInput string, targetDir string, nameOverride string) (*Impor
 		case (t == "-d" || t == "--data" || t == "--data-raw" || t == "--data-binary") && i+1 < len(tokens):
 			bodyStr = tokens[i+1]
 			i++
+		case strings.HasPrefix(t, "--data="):
+			bodyStr = strings.TrimPrefix(t, "--data=")
+		case strings.HasPrefix(t, "--data-raw="):
+			bodyStr = strings.TrimPrefix(t, "--data-raw=")
+		case strings.HasPrefix(t, "--data-binary="):
+			bodyStr = strings.TrimPrefix(t, "--data-binary=")
+		case t == "--data-urlencode" && i+1 < len(tokens):
+			addDataUrlencode(tokens[i+1])
+			i++
+		case strings.HasPrefix(t, "--data-urlencode="):
+			addDataUrlencode(strings.TrimPrefix(t, "--data-urlencode="))
 		case (t == "-u" || t == "--user") && i+1 < len(tokens):
 			u := tokens[i+1]
-			parts := strings.SplitN(u, ":", 2)
-			authMap["type"] = "basic"
-			authMap["username"] = parts[0]
-			if len(parts) > 1 {
-				authMap["password"] = parts[1]
+			if !hasExplicitAuthHeader {
+				parts := strings.SplitN(u, ":", 2)
+				authMap = map[string]any{
+					"type":     "basic",
+					"username": parts[0],
+				}
+				if len(parts) > 1 {
+					pass := parts[1]
+					if pass != "" && !strings.HasPrefix(pass, "{{") && !strings.HasPrefix(pass, "$env:") {
+						extractedSecrets["password"] = pass
+						pass = "{{password}}"
+					}
+					authMap["password"] = pass
+				}
 			}
 			i++
+		case strings.HasPrefix(t, "--user="):
+			u := strings.TrimPrefix(t, "--user=")
+			if !hasExplicitAuthHeader {
+				parts := strings.SplitN(u, ":", 2)
+				authMap = map[string]any{
+					"type":     "basic",
+					"username": parts[0],
+				}
+				if len(parts) > 1 {
+					pass := parts[1]
+					if pass != "" && !strings.HasPrefix(pass, "{{") && !strings.HasPrefix(pass, "$env:") {
+						extractedSecrets["password"] = pass
+						pass = "{{password}}"
+					}
+					authMap["password"] = pass
+				}
+			}
 		default:
 			if !strings.HasPrefix(t, "-") && rawURL == "" {
 				rawURL = t
@@ -80,7 +156,9 @@ func ImportCurl(curlInput string, targetDir string, nameOverride string) (*Impor
 	}
 
 	if method == "" {
-		if bodyStr != "" {
+		if forceGet {
+			method = "GET"
+		} else if bodyStr != "" || len(formFields) > 0 {
 			method = "POST"
 		} else {
 			method = "GET"
@@ -99,6 +177,12 @@ func ImportCurl(curlInput string, targetDir string, nameOverride string) (*Impor
 		} else {
 			queryParams[k] = v
 		}
+	}
+	if forceGet && len(formFields) > 0 {
+		for k, v := range formFields {
+			queryParams[k] = v
+		}
+		formFields = nil
 	}
 
 	// Clean URL without query string
@@ -133,7 +217,9 @@ func ImportCurl(curlInput string, targetDir string, nameOverride string) (*Impor
 		reqSpec["auth"] = authMap
 	}
 
-	if bodyStr != "" {
+	if len(formFields) > 0 {
+		reqSpec["body"] = map[string]any{"form": formFields}
+	} else if bodyStr != "" {
 		var parsedJSON any
 		if err := json.Unmarshal([]byte(bodyStr), &parsedJSON); err == nil && (strings.HasPrefix(strings.TrimSpace(bodyStr), "{") || strings.HasPrefix(strings.TrimSpace(bodyStr), "[")) {
 			reqSpec["body"] = map[string]any{"json": parsedJSON}
@@ -156,12 +242,44 @@ func ImportCurl(curlInput string, targetDir string, nameOverride string) (*Impor
 		return nil, fmt.Errorf("failed to write %s: %w", destFile, err)
 	}
 
+	var warnings []string
+	if len(extractedSecrets) > 0 {
+		if z, zErr := zone.FindOrNone(targetDir); zErr == nil && z != nil {
+			srvName, _ := z.Config["default_server"].(string)
+			if srvName == "" {
+				srvName = "local"
+			}
+			_ = os.MkdirAll(z.ServersDir(), 0755)
+			secFile := filepath.Join(z.ServersDir(), srvName+".secrets.yaml")
+			existing, _ := zone.LoadYAML(secFile)
+			if existing == nil {
+				existing = make(map[string]any)
+			}
+			secVars, ok := existing["vars"].(map[string]any)
+			if !ok {
+				secVars = make(map[string]any)
+			}
+			for k, v := range extractedSecrets {
+				secVars[k] = v
+			}
+			existing["vars"] = secVars
+			if sYAML, sErr := zone.DumpYAML(existing); sErr == nil {
+				_ = os.WriteFile(secFile, []byte(sYAML), 0600)
+				relSec, _ := filepath.Rel(z.Root, secFile)
+				warnings = append(warnings, fmt.Sprintf("extracted credentials to %s (gitignored) and parameterized auth with {{...}}", relSec))
+			}
+		} else {
+			warnings = append(warnings, "parameterized literal credentials in auth block ({{token}} / {{password}})")
+		}
+	}
+
 	report := &ImportReport{
 		Collection:     fileSlug,
 		Destination:    targetDir,
 		Requests:       1,
 		TestsConverted: 1,
 		Files:          []string{destFile},
+		Warnings:       warnings,
 		Unconverted:    make(map[string][]string),
 	}
 	return report, nil

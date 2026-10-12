@@ -85,6 +85,7 @@ type WebhookConfig struct {
 // RegionCheckResult records the outcome of a probe check execution in an individual region.
 type RegionCheckResult struct {
 	Region           string   `json:"region"`
+	Simulated        bool     `json:"simulated"`
 	StatusCode       int      `json:"status_code"`
 	ElapsedMs        float64  `json:"elapsed_ms"`
 	Passed           bool     `json:"passed"`
@@ -94,14 +95,15 @@ type RegionCheckResult struct {
 
 // ProbeCheckResult aggregates the multi-region execution and consensus status.
 type ProbeCheckResult struct {
-	ProbeName     string              `json:"probe_name"`
-	Timestamp     time.Time           `json:"timestamp"`
-	Status        ProbeStatus         `json:"status"`
-	PassedRegions int                 `json:"passed_regions"`
-	FailedRegions int                 `json:"failed_regions"`
-	TotalRegions  int                 `json:"total_regions"`
-	Checks        []RegionCheckResult `json:"checks"`
-	Summary       string              `json:"summary"`
+	ProbeName        string              `json:"probe_name"`
+	Timestamp        time.Time           `json:"timestamp"`
+	Status           ProbeStatus         `json:"status"`
+	SimulatedRegions bool                `json:"simulated_regions"`
+	PassedRegions    int                 `json:"passed_regions"`
+	FailedRegions    int                 `json:"failed_regions"`
+	TotalRegions     int                 `json:"total_regions"`
+	Checks           []RegionCheckResult `json:"checks"`
+	Summary          string              `json:"summary"`
 }
 
 // ProbeState maintains state machine history across consecutive check runs.
@@ -211,10 +213,11 @@ func EvaluateConsensus(checks []RegionCheckResult, threshold int) ProbeStatus {
 // ExecuteProbeCheck runs the probe against target across configured regions.
 func ExecuteProbeCheck(sess *runner.Session, cfg *ProbeConfig) *ProbeCheckResult {
 	res := &ProbeCheckResult{
-		ProbeName:    cfg.Name,
-		Timestamp:    time.Now().UTC(),
-		TotalRegions: len(cfg.Regions),
-		Checks:       make([]RegionCheckResult, 0, len(cfg.Regions)),
+		ProbeName:        cfg.Name,
+		Timestamp:        time.Now().UTC(),
+		SimulatedRegions: true,
+		TotalRegions:     len(cfg.Regions),
+		Checks:           make([]RegionCheckResult, 0, len(cfg.Regions)),
 	}
 
 	for _, region := range cfg.Regions {
@@ -226,8 +229,9 @@ func ExecuteProbeCheck(sess *runner.Session, cfg *ProbeConfig) *ProbeCheckResult
 		}
 
 		check := RegionCheckResult{
-			Region: region,
-			Passed: true,
+			Region:    region,
+			Simulated: true,
+			Passed:    true,
 		}
 
 		var runResult *types.Result
@@ -414,6 +418,15 @@ func HandleStateTransition(state *ProbeState, checkResult *ProbeCheckResult, cfg
 				event.Notified = append(event.Notified, "Opsgenie")
 			}
 		}
+
+		// Dispatch Webhook
+		if cfg.Alerts.Webhook != nil && cfg.Alerts.Webhook.URL != "" {
+			if err := SendWebhook(client, cfg.Alerts.Webhook.URL, "trigger", cfg.Name, event.Summary, state.IncidentDedupKey, checkResult, failedDetails); err != nil {
+				event.AlertErrors = append(event.AlertErrors, fmt.Sprintf("Webhook: %v", err))
+			} else {
+				event.Notified = append(event.Notified, "Webhook")
+			}
+		}
 	}
 
 	// 2. Transition back to HEALTHY (Resolution)
@@ -451,6 +464,15 @@ func HandleStateTransition(state *ProbeState, checkResult *ProbeCheckResult, cfg
 				event.AlertErrors = append(event.AlertErrors, fmt.Sprintf("Opsgenie: %v", err))
 			} else {
 				event.Notified = append(event.Notified, "Opsgenie (Resolved)")
+			}
+		}
+
+		// Resolve Webhook
+		if cfg.Alerts.Webhook != nil && cfg.Alerts.Webhook.URL != "" {
+			if err := SendWebhook(client, cfg.Alerts.Webhook.URL, "resolve", cfg.Name, event.Summary, state.IncidentDedupKey, checkResult, resolveDetails); err != nil {
+				event.AlertErrors = append(event.AlertErrors, fmt.Sprintf("Webhook: %v", err))
+			} else {
+				event.Notified = append(event.Notified, "Webhook (Resolved)")
 			}
 		}
 

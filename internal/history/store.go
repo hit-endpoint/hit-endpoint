@@ -87,6 +87,109 @@ func generateID() string {
 	return fmt.Sprintf("hit_%d_%s", time.Now().Unix(), hex.EncodeToString(b))
 }
 
+func IsSensitiveHeader(k string) bool {
+	lk := strings.ToLower(strings.TrimSpace(k))
+	return lk == "authorization" ||
+		lk == "proxy-authorization" ||
+		lk == "cookie" ||
+		lk == "set-cookie" ||
+		lk == "x-api-key" ||
+		lk == "api-key" ||
+		strings.Contains(lk, "secret") ||
+		strings.Contains(lk, "token") ||
+		strings.Contains(lk, "key") ||
+		strings.Contains(lk, "password") ||
+		strings.Contains(lk, "credential")
+}
+
+func IsSensitiveKey(k string) bool {
+	lk := strings.ToLower(strings.TrimSpace(k))
+	return lk == "password" ||
+		lk == "passwd" ||
+		lk == "pass" ||
+		lk == "secret" ||
+		lk == "client_secret" ||
+		lk == "token" ||
+		lk == "access_token" ||
+		lk == "refresh_token" ||
+		lk == "id_token" ||
+		lk == "api_key" ||
+		lk == "apikey" ||
+		lk == "private_key" ||
+		lk == "authorization" ||
+		lk == "cookie" ||
+		strings.HasSuffix(lk, "_secret") ||
+		strings.HasSuffix(lk, "_token") ||
+		strings.HasSuffix(lk, "_password") ||
+		strings.HasSuffix(lk, "_key")
+}
+
+func maskJSONAny(v any, maskFn func(string) string) (any, bool) {
+	switch val := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(val))
+		changed := false
+		for k, item := range val {
+			if IsSensitiveKey(k) {
+				if s, ok := item.(string); ok && s != "" && s != "[MASKED]" && s != "********" {
+					out[k] = "[MASKED]"
+					changed = true
+					continue
+				}
+			}
+			mItem, c := maskJSONAny(item, maskFn)
+			if c {
+				changed = true
+			}
+			out[k] = mItem
+		}
+		return out, changed
+	case []any:
+		out := make([]any, len(val))
+		changed := false
+		for i, item := range val {
+			mItem, c := maskJSONAny(item, maskFn)
+			if c {
+				changed = true
+			}
+			out[i] = mItem
+		}
+		return out, changed
+	case string:
+		if maskFn != nil {
+			masked := maskFn(val)
+			return masked, masked != val
+		}
+		return val, false
+	default:
+		return v, false
+	}
+}
+
+func MaskJSONText(text string, maskFn func(string) string) string {
+	if text == "" {
+		return ""
+	}
+	trimmed := strings.TrimSpace(text)
+	if (strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}")) ||
+		(strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]")) {
+		var parsed any
+		if err := json.Unmarshal([]byte(text), &parsed); err == nil {
+			masked, changed := maskJSONAny(parsed, maskFn)
+			if !changed {
+				return text
+			}
+			if b, err := json.Marshal(masked); err == nil {
+				return string(b)
+			}
+		}
+	}
+	if maskFn != nil {
+		return maskFn(text)
+	}
+	return text
+}
+
 func NewEntryFromResult(r *types.Result, source, zoneName, serverName string, maskFn func(string) string) *Entry {
 	if maskFn == nil {
 		maskFn = func(s string) string { return s }
@@ -94,16 +197,38 @@ func NewEntryFromResult(r *types.Result, source, zoneName, serverName string, ma
 
 	headers := make(map[string]string)
 	for k, v := range r.RequestHeaders {
-		lk := strings.ToLower(k)
-		if lk == "authorization" || lk == "proxy-authorization" || strings.Contains(lk, "secret") || strings.Contains(lk, "key") {
+		if IsSensitiveHeader(k) {
 			headers[k] = "[MASKED]"
 		} else {
 			headers[k] = maskFn(v)
 		}
 	}
 
-	reqBody := maskFn(r.RequestBody)
-	respText := r.Text
+	respHeaders := make(map[string]string)
+	for k, v := range r.Headers {
+		if IsSensitiveHeader(k) {
+			respHeaders[k] = "[MASKED]"
+		} else {
+			respHeaders[k] = maskFn(v)
+		}
+	}
+
+	var captures map[string]any
+	if len(r.Captures) > 0 {
+		captures = make(map[string]any, len(r.Captures))
+		for k, v := range r.Captures {
+			if IsSensitiveKey(k) {
+				captures[k] = "[MASKED]"
+			} else if s, ok := v.(string); ok {
+				captures[k] = maskFn(s)
+			} else {
+				captures[k] = v
+			}
+		}
+	}
+
+	reqBody := MaskJSONText(r.RequestBody, maskFn)
+	respText := MaskJSONText(r.Text, maskFn)
 	if len(respText) > 4000 {
 		respText = respText[:4000] + "... [truncated]"
 	}
@@ -113,7 +238,7 @@ func NewEntryFromResult(r *types.Result, source, zoneName, serverName string, ma
 		tests = append(tests, TestSummary{
 			Name:   t.Name,
 			Passed: t.Passed,
-			Detail: t.Detail,
+			Detail: maskFn(t.Detail),
 		})
 	}
 
@@ -137,11 +262,11 @@ func NewEntryFromResult(r *types.Result, source, zoneName, serverName string, ma
 		Reason:          r.Reason,
 		ElapsedMs:       r.ElapsedMs,
 		ResponseSize:    r.Size,
-		ResponseHeaders: r.Headers,
+		ResponseHeaders: respHeaders,
 		ResponseBody:    respText,
 		Tests:           tests,
-		Captures:        r.Captures,
-		Error:           r.Error,
+		Captures:        captures,
+		Error:           maskFn(r.Error),
 	}
 }
 

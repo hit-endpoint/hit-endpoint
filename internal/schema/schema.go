@@ -11,11 +11,19 @@ var RequestJSONSchema = map[string]any{
 	"title":       "HitRequestSpec",
 	"description": "Schema for a hit-api-tester request file (.yaml)",
 	"type":        "object",
-	"required":    []string{"name", "method", "url"},
+	"required":    []string{"method"},
+	"anyOf": []map[string]any{
+		{"required": []string{"url"}},
+		{"required": []string{"path"}},
+	},
 	"properties": map[string]any{
 		"name": map[string]any{
 			"type":        "string",
 			"description": "Human-readable name of the request",
+		},
+		"description": map[string]any{
+			"type":        "string",
+			"description": "Detailed description of the request",
 		},
 		"method": map[string]any{
 			"type":        "string",
@@ -25,6 +33,10 @@ var RequestJSONSchema = map[string]any{
 		"url": map[string]any{
 			"type":        "string",
 			"description": "Target URL (relative or absolute, supports {{variables}})",
+		},
+		"path": map[string]any{
+			"type":        "string",
+			"description": "Alias for url (relative or absolute target path)",
 		},
 		"headers": map[string]any{
 			"type":        "object",
@@ -55,13 +67,25 @@ var RequestJSONSchema = map[string]any{
 			"type":        "number",
 			"description": "Timeout in seconds",
 		},
+		"follow_redirects": map[string]any{
+			"type":        "boolean",
+			"description": "Whether to follow HTTP redirects",
+		},
+		"verify": map[string]any{
+			"type":        "boolean",
+			"description": "Whether to verify TLS certificates",
+		},
 		"vars": map[string]any{
 			"type":        "object",
 			"description": "Request-level default variables",
 		},
 		"tests": map[string]any{
 			"type":        "array",
-			"description": "List of assertions: status, max_ms, json, headers, expr",
+			"description": "List of assertions: status, max_ms, latency, json, body, headers, expr",
+		},
+		"assert": map[string]any{
+			"type":        "array",
+			"description": "Alias for tests (declarative assertions list)",
 		},
 		"captures": map[string]any{
 			"type":        "object",
@@ -98,7 +122,8 @@ var FlowJSONSchema = map[string]any{
 					"request":       map[string]any{"type": "string", "description": "Request reference path"},
 					"set":           map[string]any{"type": "object", "description": "Assign variables"},
 					"sleep":         map[string]any{"type": "number", "description": "Pause execution (seconds)"},
-					"script":        map[string]any{"type": "string", "description": "Hook script to execute"},
+					"script":        map[string]any{"type": "string", "description": "Python hook script to execute"},
+					"python":        map[string]any{"type": "string", "description": "Alias for script (Python hook script)"},
 					"flow":          map[string]any{"type": "string", "description": "Nested subflow reference"},
 					"tests":         map[string]any{"type": "array", "description": "Additional test assertions for this step"},
 					"replace_tests": map[string]any{"type": "array", "description": "Replace all assertions for this step"},

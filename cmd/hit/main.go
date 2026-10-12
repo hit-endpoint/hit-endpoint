@@ -87,6 +87,35 @@ func parseKV(items []string, sep string) (map[string]any, error) {
 	return out, nil
 }
 
+func parseHeadersKV(items []string) (map[string]any, error) {
+	out := make(map[string]any)
+	for _, it := range items {
+		idx := strings.Index(it, ":")
+		if idx < 0 {
+			return nil, zone.NewZoneError("expected key:value, got '%s'", it)
+		}
+		k := strings.TrimSpace(it[:idx])
+		v := strings.TrimSpace(it[idx+1:])
+		matchedKey := ""
+		for existing := range out {
+			if strings.EqualFold(existing, k) {
+				matchedKey = existing
+				break
+			}
+		}
+		if matchedKey != "" {
+			joiner := ", "
+			if strings.EqualFold(matchedKey, "Cookie") {
+				joiner = "; "
+			}
+			out[matchedKey] = fmt.Sprintf("%v%s%s", out[matchedKey], joiner, v)
+		} else {
+			out[k] = v
+		}
+	}
+	return out, nil
+}
+
 func coerce(text string) any {
 	if text == "true" {
 		return true
@@ -237,12 +266,25 @@ func isHTTPMethod(s string) bool {
 }
 
 func isURLOrPath(s string) bool {
-	return strings.HasPrefix(s, "http://") ||
+	if strings.HasPrefix(s, "http://") ||
 		strings.HasPrefix(s, "https://") ||
 		strings.HasPrefix(s, "/") ||
 		strings.HasPrefix(s, "localhost:") ||
 		strings.HasPrefix(s, "127.0.0.1:") ||
-		strings.Contains(s, "://")
+		strings.Contains(s, "://") {
+		return true
+	}
+	if strings.HasSuffix(s, ".yaml") || strings.HasSuffix(s, ".yml") || strings.HasSuffix(s, ".json") {
+		return false
+	}
+	host := s
+	if idx := strings.Index(s, "/"); idx > 0 {
+		host = s[:idx]
+	}
+	if strings.Contains(host, ":") || strings.Contains(host, ".") {
+		return true
+	}
+	return false
 }
 
 func isKnownSubcommand(s string) bool {
@@ -304,8 +346,8 @@ func findFirstPositional(args []string) string {
 				"-m", "--method", "-v", "--vars", "--variables",
 				"--expect", "--event",
 				"--test", "--capture", "--status", "-w", "-z", "--zone",
-				"-e", "-s", "--server", "--var", "--junit", "--webhook-on-failure", "--sarif", "--html", "--har", "-o", "--output",
-				"-c", "-n", "-d", "--rps", "--warmup", "--ramp-up", "--threshold", "--max-body",
+				"-e", "-s", "--server", "--var", "--junit", "--csv", "--webhook-on-failure", "--sarif", "--html", "--har", "-o", "--output",
+				"-c", "-n", "-d", "--rps", "--warmup", "--ramp-up", "--threshold", "--max-body", "--timeout",
 				"--at", "--start", "--every", "--interval", "-i", "--count":
 				i++
 			}
@@ -524,6 +566,13 @@ func dispatch(cmd string, args []string, globals *GlobalFlags, p *output.Printer
 }
 
 func readArg(val string) (string, error) {
+	if val == "@-" || val == "-" {
+		b, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return "", err
+		}
+		return string(b), nil
+	}
 	if strings.HasPrefix(val, "@") {
 		b, err := os.ReadFile(val[1:])
 		if err != nil {
@@ -532,6 +581,14 @@ func readArg(val string) (string, error) {
 		return string(b), nil
 	}
 	return val, nil
+}
+
+func parseTimeoutSec(s string) (float64, error) {
+	s = strings.TrimSpace(s)
+	if d, err := time.ParseDuration(s); err == nil {
+		return d.Seconds(), nil
+	}
+	return strconv.ParseFloat(s, 64)
 }
 
 func cmdLearn(args []string, globals *GlobalFlags, p *output.Printer) error {
@@ -641,28 +698,37 @@ func printLessonResult(l *learn.LessonResult, p *output.Printer) {
 
 func cmdAdhoc(cmd string, args []string, globals *GlobalFlags, p *output.Printer) error {
 	var (
-		method       = "GET"
-		reqURL       string
-		headersList  []string
-		queryList    []string
-		formList     []string
-		bodyRaw      string
-		jsonBodyRaw  string
-		authStr      string
-		testList     []string
-		captureList  []string
-		statusFilter int
-		jsonOutput   bool
-		verbose      bool
-		noPersist    bool
-		agentFormat  bool
-		rawTime      bool
+		method         = "GET"
+		explicitMethod bool
+		reqURL         string
+		headersList    []string
+		queryList      []string
+		formList       []string
+		bodyRaw        string
+		jsonBodyRaw    string
+		authStr        string
+		testList       []string
+		captureList    []string
+		statusFilter   int
+		timeoutSec     float64
+		jsonOutput     bool
+		verbose        bool
+		noPersist      bool
+		agentFormat    bool
+		rawTime        bool
 	)
 
 	var positional []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
+		case (a == "-m" || a == "--method") && i+1 < len(args):
+			method = strings.ToUpper(args[i+1])
+			explicitMethod = true
+			i++
+		case strings.HasPrefix(a, "--method="):
+			method = strings.ToUpper(strings.TrimPrefix(a, "--method="))
+			explicitMethod = true
 		case (a == "-H" || a == "--header") && i+1 < len(args):
 			headersList = append(headersList, args[i+1])
 			i++
@@ -681,6 +747,8 @@ func cmdAdhoc(cmd string, args []string, globals *GlobalFlags, p *output.Printer
 		case a == "--auth" && i+1 < len(args):
 			authStr = args[i+1]
 			i++
+		case strings.HasPrefix(a, "--auth="):
+			authStr = strings.TrimPrefix(a, "--auth=")
 		case a == "--test" && i+1 < len(args):
 			testList = append(testList, args[i+1])
 			i++
@@ -690,6 +758,20 @@ func cmdAdhoc(cmd string, args []string, globals *GlobalFlags, p *output.Printer
 		case a == "--status" && i+1 < len(args):
 			statusFilter, _ = strconv.Atoi(args[i+1])
 			i++
+		case a == "--timeout" && i+1 < len(args):
+			var err error
+			timeoutSec, err = parseTimeoutSec(args[i+1])
+			if err != nil || timeoutSec <= 0 {
+				return zone.NewZoneError("invalid --timeout value %q", args[i+1])
+			}
+			i++
+		case strings.HasPrefix(a, "--timeout="):
+			valStr := strings.TrimPrefix(a, "--timeout=")
+			var err error
+			timeoutSec, err = parseTimeoutSec(valStr)
+			if err != nil || timeoutSec <= 0 {
+				return zone.NewZoneError("invalid --timeout value %q", valStr)
+			}
 		case a == "--json":
 			jsonOutput = true
 		case a == "--format=agent" || a == "--agent":
@@ -721,6 +803,7 @@ func cmdAdhoc(cmd string, args []string, globals *GlobalFlags, p *output.Printer
 		reqURL = positional[0]
 	} else {
 		method = strings.ToUpper(positional[0])
+		explicitMethod = true
 		reqURL = positional[1]
 	}
 
@@ -745,8 +828,9 @@ func cmdAdhoc(cmd string, args []string, globals *GlobalFlags, p *output.Printer
 			}
 			if sh.URL != "" {
 				reqURL = sh.URL
-				if sh.Method != "" {
+				if sh.Method != "" && !explicitMethod {
 					method = sh.MethodDisplay()
+					explicitMethod = true
 				}
 			} else if sh.Ref != "" {
 				reqURL = sh.Ref
@@ -754,21 +838,25 @@ func cmdAdhoc(cmd string, args []string, globals *GlobalFlags, p *output.Printer
 		}
 	}
 
+	if !explicitMethod && (jsonBodyRaw != "" || bodyRaw != "" || len(formList) > 0) {
+		method = "POST"
+	}
+
 	sess, err := runner.NewSession(runner.SessionOptions{
-		Zone:              z,
-		ServerName:        globals.Server,
-		ExtraVars:         globals.Vars,
-		Persist:           !noPersist,
-		ZoneOptional:      true,
-		Verify:            !globals.Insecure,
-		NoHistory:         globals.NoHistory,
+		Zone:         z,
+		ServerName:   globals.Server,
+		ExtraVars:    globals.Vars,
+		Persist:      !noPersist,
+		ZoneOptional: true,
+		Verify:       !globals.Insecure,
+		NoHistory:    globals.NoHistory,
 	})
 	if err != nil {
 		return err
 	}
 	defer sess.Close()
 
-	headers, err := parseKV(headersList, ":")
+	headers, err := parseHeadersKV(headersList)
 	if err != nil {
 		return err
 	}
@@ -826,6 +914,18 @@ func cmdAdhoc(cmd string, args []string, globals *GlobalFlags, p *output.Printer
 				}
 			}
 			auth = map[string]any{"type": "basic", "username": user, "password": pass}
+		case "apikey", "api-key", "api_key":
+			headerName, apiKeyVal := "X-API-Key", ""
+			if len(parts) > 1 {
+				kv := strings.SplitN(parts[1], ":", 2)
+				if len(kv) == 2 {
+					headerName = kv[0]
+					apiKeyVal = kv[1]
+				} else {
+					apiKeyVal = kv[0]
+				}
+			}
+			auth = map[string]any{"type": "apikey", "key": headerName, "value": apiKeyVal}
 		case "cookie":
 			rest := ""
 			if len(parts) > 1 {
@@ -835,7 +935,7 @@ func cmdAdhoc(cmd string, args []string, globals *GlobalFlags, p *output.Printer
 		case "none":
 			auth = "none"
 		default:
-			return zone.NewZoneError("--auth must be bearer:TOKEN, basic:USER:PASS, cookie:COOKIE or none")
+			return zone.NewZoneError("--auth must be bearer:TOKEN, basic:USER:PASS, apikey:[HEADER:]KEY, cookie:COOKIE or none")
 		}
 	} else if headers["Authorization"] == "" && headers["authorization"] == "" {
 		if tok, ok := sess.SessionVars["token"].(string); ok && tok != "" {
@@ -865,6 +965,11 @@ func cmdAdhoc(cmd string, args []string, globals *GlobalFlags, p *output.Printer
 		tests = append(tests, map[string]any{"status": statusFilter})
 	}
 
+	var timeoutArg any
+	if timeoutSec > 0 {
+		timeoutArg = timeoutSec
+	}
+
 	var r *types.Result
 	if z != nil && len(positional) == 1 && !strings.Contains(reqURL, "://") && !strings.HasPrefix(reqURL, "/") {
 		if specPath, err := z.ResolveRequest(reqURL); err == nil && specPath != "" {
@@ -877,12 +982,18 @@ func cmdAdhoc(cmd string, args []string, globals *GlobalFlags, p *output.Printer
 				if len(query) > 0 {
 					stepOverrides["query"] = query
 				}
+				if timeoutArg != nil {
+					stepOverrides["timeout"] = timeoutArg
+				}
 				r = sess.RunSpec(sp, stepOverrides)
 			}
 		}
 	}
 	if r == nil {
-		r = sess.Request(method, reqURL, headers, query, body, jsonBody, form, auth, tests, captures, nil, "ad hoc")
+		if !strings.Contains(reqURL, "://") && !strings.HasPrefix(reqURL, "/") && !strings.Contains(reqURL, "{{") {
+			reqURL = "http://" + reqURL
+		}
+		r = sess.Request(method, reqURL, headers, query, body, jsonBody, form, auth, tests, captures, timeoutArg, "ad hoc")
 	}
 	mask := sess.Context(nil, nil).Mask
 
@@ -1440,8 +1551,40 @@ func cmdRun(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Zone
 		}
 	}
 
+	type executedSpecInfo struct {
+		sp         *spec.RequestSpec
+		relPath    string
+		rawContent string
+	}
 	var results []*types.Result
 	var flowErrors []string
+	var executedSpecs []executedSpecInfo
+
+	recordSpec := func(sp *spec.RequestSpec, path string) {
+		if sp == nil {
+			return
+		}
+		rel := path
+		raw := ""
+		if path != "" {
+			if b, err := os.ReadFile(path); err == nil {
+				raw = string(b)
+			}
+			if z != nil {
+				if r, err := filepath.Rel(z.Root, path); err == nil {
+					rel = r
+				}
+			}
+		}
+		if rel == "" {
+			rel = sp.Name
+		}
+		executedSpecs = append(executedSpecs, executedSpecInfo{
+			sp:         sp,
+			relPath:    rel,
+			rawContent: raw,
+		})
+	}
 
 	for _, ref := range refs {
 		flowPath, err := z.ResolveChain(ref)
@@ -1449,6 +1592,19 @@ func cmdRun(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Zone
 			flowData, err := flows.LoadFlow(flowPath)
 			if err != nil {
 				return err
+			}
+			if steps, ok := flowData["steps"].([]any); ok {
+				for _, rawStep := range steps {
+					if st, ok := rawStep.(map[string]any); ok {
+						if reqRef, ok := st["request"].(string); ok && reqRef != "" {
+							if stPath, err := z.ResolveRequest(reqRef); err == nil {
+								if stSp, err := spec.LoadSpec(stPath, z.DefaultsChain(stPath)); err == nil {
+									recordSpec(stSp, stPath)
+								}
+							}
+						}
+					}
+				}
 			}
 			savedQuiet := effectiveQuiet
 			effectiveQuiet = !fullOutput
@@ -1461,6 +1617,13 @@ func cmdRun(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Zone
 			results = append(results, fr.Results...)
 			if fr.Error != "" {
 				flowErrors = append(flowErrors, fmt.Sprintf("%s: %s", fr.Name, fr.Error))
+				if len(fr.Results) == 0 || fr.Results[len(fr.Results)-1].OK() {
+					results = append(results, &types.Result{
+						Name:  fr.Name,
+						Ref:   ref,
+						Error: fr.Error,
+					})
+				}
 				if !jsonOutput && !bodyOnly && !agentFormat {
 					p.Out(p.Red(fmt.Sprintf("flow stopped: %s", fr.Error)))
 				}
@@ -1474,6 +1637,11 @@ func cmdRun(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Zone
 		}
 		fi, err := os.Stat(targetPath)
 		if err == nil && fi.IsDir() {
+			for _, reqPath := range z.ListRequests(targetPath) {
+				if fSp, err := spec.LoadSpec(reqPath, z.DefaultsChain(reqPath)); err == nil {
+					recordSpec(fSp, reqPath)
+				}
+			}
 			savedQuiet := effectiveQuiet
 			effectiveQuiet = !fullOutput
 			folderResults := sess.RunFolder(targetPath, showResult, failFast)
@@ -1486,6 +1654,7 @@ func cmdRun(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Zone
 		if err != nil {
 			return err
 		}
+		recordSpec(sp, targetPath)
 		r := sess.RunSpec(sp, stepOverrides)
 		results = append(results, r)
 		showResult(r)
@@ -1509,13 +1678,47 @@ func cmdRun(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Zone
 		if z != nil {
 			zRoot = z.Root
 		}
-		if pol, err := policy.LoadPolicy(zRoot); err == nil && pol.MaxLatency > 0 {
-			maxMs := float64(pol.MaxLatency.Milliseconds())
-			for _, r := range results {
-				if r.ElapsedMs > maxMs {
-					allOK = false
-					if !jsonOutput && !bodyOnly && !codeOnly && !timeOnly && !agentFormat {
-						p.Out(p.Red(fmt.Sprintf("✗ Policy breach: %s latency %.1fms exceeds policy ceiling %.0fms", r.Ref, r.ElapsedMs, maxMs)))
+		pol, err := policy.LoadPolicy(zRoot)
+		if err != nil {
+			allOK = false
+			if !jsonOutput && !bodyOnly && !codeOnly && !timeOnly && !agentFormat {
+				p.Out(p.Red(fmt.Sprintf("✗ Policy error: %v", err)))
+			}
+		} else if pol != nil {
+			for _, es := range executedSpecs {
+				violations := policy.CheckRequestSpec(es.relPath, es.sp, es.rawContent, pol)
+				for _, v := range violations {
+					if v.Severity == policy.SeverityError {
+						allOK = false
+						if !jsonOutput && !bodyOnly && !codeOnly && !timeOnly && !agentFormat {
+							p.Out(p.Red(fmt.Sprintf("✗ Policy breach [%s] %s: %s", v.Rule, v.File, v.Message)))
+						}
+					} else if !jsonOutput && !bodyOnly && !codeOnly && !timeOnly && !agentFormat {
+						p.Out(p.Yellow(fmt.Sprintf("! Policy warning [%s] %s: %s", v.Rule, v.File, v.Message)))
+					}
+				}
+			}
+			if pol.MaxLatency > 0 {
+				maxMs := float64(pol.MaxLatency.Microseconds()) / 1000.0
+				checkLatency := func(refName string, elapsed float64) {
+					if elapsed > maxMs {
+						allOK = false
+						if !jsonOutput && !bodyOnly && !codeOnly && !timeOnly && !agentFormat {
+							p.Out(p.Red(fmt.Sprintf("✗ Policy breach [max_latency] %s: latency %.1fms exceeds policy ceiling %.1fms", refName, elapsed, maxMs)))
+						}
+					}
+				}
+				for _, r := range results {
+					if len(r.Matrix) > 0 {
+						for _, mr := range r.Matrix {
+							checkLatency(mr.Name, mr.ElapsedMs)
+						}
+					} else {
+						refName := r.Ref
+						if refName == "" {
+							refName = r.Name
+						}
+						checkLatency(refName, r.ElapsedMs)
 					}
 				}
 			}
@@ -1581,15 +1784,18 @@ func cmdRun(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Zone
 		output.EmitGitHubAnnotations(results, os.Stdout)
 		_ = output.AppendGitHubStepSummary(results)
 	}
+	maskFn := sess.Context(nil, nil).Mask
 	if htmlPath != "" {
-		if err := report.WriteHTMLReport(results, fmt.Sprintf("hit run: %s", strings.Join(refs, ", ")), htmlPath); err != nil {
+		sanitized := report.SanitizeResults(results, maskFn)
+		if err := report.WriteHTMLReport(sanitized, fmt.Sprintf("hit run: %s", strings.Join(refs, ", ")), htmlPath); err != nil {
 			fmt.Fprintf(os.Stderr, "error writing html report: %v\n", err)
 		} else {
 			p.Out(p.Green(fmt.Sprintf("✓ HTML report written to %s", htmlPath)))
 		}
 	}
 	if harPath != "" {
-		if err := report.WriteHAR(report.BuildHARFromResults(results), harPath); err != nil {
+		sanitized := report.SanitizeResults(results, maskFn)
+		if err := report.WriteHAR(report.BuildHARFromResults(sanitized), harPath); err != nil {
 			fmt.Fprintf(os.Stderr, "error writing har archive: %v\n", err)
 		} else {
 			p.Out(p.Green(fmt.Sprintf("✓ HAR archive written to %s", harPath)))
@@ -1601,11 +1807,33 @@ func cmdRun(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Zone
 	}
 
 	if publish {
+		var zCloud zone.CloudConfig
+		if z != nil {
+			zCloud = z.CloudConfig()
+		}
 		apiKey := os.Getenv("HIT_API_KEY")
+		if apiKey == "" {
+			apiKey = os.Getenv("HIT_HUB_TOKEN")
+		}
+		if apiKey == "" {
+			apiKey = zCloud.APIKey
+		}
 		projectID := os.Getenv("HIT_PROJECT_ID")
+		if projectID == "" {
+			projectID = zCloud.ProjectID
+		}
 		cloudURL := publishURL
 		if cloudURL == "" {
 			cloudURL = os.Getenv("HIT_CLOUD_URL")
+		}
+		if cloudURL == "" {
+			cloudURL = os.Getenv("HIT_TELEMETRY_ENDPOINT")
+		}
+		if cloudURL == "" {
+			cloudURL = os.Getenv("HIT_HUB_URL")
+		}
+		if cloudURL == "" {
+			cloudURL = zCloud.Endpoint
 		}
 		if cloudURL == "" {
 			cloudURL = telemetry.DefaultCloudURL
@@ -1617,8 +1845,10 @@ func cmdRun(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Zone
 			CloudURL:  cloudURL,
 		}
 
-		maskFn := sess.Context(nil, nil).Mask
 		payload := telemetry.BuildTelemetryPayload(results, flowErrors, z, globals.Server, maskFn)
+		if projectID != "" {
+			payload.ProjectID = projectID
+		}
 
 		res, err := telemetry.PublishRun(context.Background(), nil, cfg, payload)
 		if err != nil {
@@ -1837,6 +2067,15 @@ func cmdPerf(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Zon
 	distributeCount := 0
 	hubURL := os.Getenv("HIT_HUB_URL")
 	hubToken := os.Getenv("HIT_HUB_TOKEN")
+	if hubToken == "" {
+		hubToken = os.Getenv("HIT_API_KEY")
+	}
+	if z != nil {
+		zc := z.CloudConfig()
+		if hubToken == "" {
+			hubToken = zc.APIKey
+		}
+	}
 	region := ""
 
 	for i := 0; i < len(args); i++ {
@@ -1873,6 +2112,8 @@ func cmdPerf(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Zon
 		case a == "--csv" && i+1 < len(args):
 			opts.CsvPath = args[i+1]
 			i++
+		case strings.HasPrefix(a, "--csv="):
+			opts.CsvPath = strings.TrimPrefix(a, "--csv=")
 		case a == "--workers" && i+1 < len(args):
 			workersStr = args[i+1]
 			i++
@@ -1927,6 +2168,13 @@ func cmdPerf(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Zon
 	}
 	defer sess.Close()
 
+	warnWritePerf := func(method, targetName string) {
+		m := strings.ToUpper(strings.TrimSpace(method))
+		if !jsonOutput && (m == "POST" || m == "PUT" || m == "DELETE" || m == "PATCH") {
+			fmt.Fprintf(os.Stderr, "%s\n", p.Yellow(fmt.Sprintf("  ⚠ Warning: load-testing mutating %s endpoint %s", m, targetName)))
+		}
+	}
+
 	opts.Progress = func(completed int, elapsed float64) {
 		if !jsonOutput && p.Color {
 			fmt.Fprintf(os.Stderr, "\r  %d done, %.0fs elapsed", completed, elapsed)
@@ -1962,11 +2210,20 @@ func cmdPerf(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Zon
 			}
 		}
 
-		// Pre-render request with coordinator session variables and base URL
+		warnWritePerf(sp.Method, sess.RefOf(sp))
+
+		// Pre-render request with coordinator session variables, base URL, and resolved auth headers
 		renderedSp, prep, _, pErr := sess.Prepare(sp, nil)
 		if pErr == nil && prep != nil {
 			spCopy := *renderedSp
 			spCopy.Url = prep.FullURL()
+			spCopy.Query = nil
+			spCopy.Auth = "none"
+			hdrs := make(map[string]any, len(prep.Headers))
+			for k, v := range prep.Headers {
+				hdrs[k] = v
+			}
+			spCopy.Headers = hdrs
 			sp = &spCopy
 		}
 
@@ -2015,6 +2272,11 @@ func cmdPerf(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Zon
 			return err
 		}
 		report = distReport.Global
+		if opts.CsvPath != "" && report != nil {
+			if err := perf.WriteReportCSV(opts.CsvPath, report); err != nil {
+				return err
+			}
+		}
 	} else {
 		// Single-node execution path
 		flowPath := ""
@@ -2056,6 +2318,8 @@ func cmdPerf(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Zon
 				}
 			}
 
+			warnWritePerf(sp.Method, sess.RefOf(sp))
+
 			if !jsonOutput {
 				targetStr := fmt.Sprintf("%d requests", opts.Total)
 				if opts.Total <= 0 && opts.Duration > 0 {
@@ -2073,6 +2337,48 @@ func cmdPerf(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Zon
 				return err
 			}
 		}
+	}
+
+	if opts.CsvPath != "" && !filepath.IsAbs(opts.CsvPath) && z != nil && z.Root != "" && globals.Zone != "" {
+		if absCsv, err := filepath.Abs(opts.CsvPath); err == nil {
+			zoneCsv := filepath.Join(z.Root, opts.CsvPath)
+			if absCsv != zoneCsv {
+				if data, err := os.ReadFile(absCsv); err == nil {
+					if dir := filepath.Dir(zoneCsv); dir != "" && dir != "." {
+						_ = os.MkdirAll(dir, 0755)
+					}
+					_ = os.WriteFile(zoneCsv, data, 0644)
+				}
+			}
+		}
+	}
+
+	if !globals.NoHistory && report != nil {
+		zoneRoot := ""
+		zoneName := ""
+		if z != nil {
+			zoneRoot = z.Root
+			zoneName = z.Name()
+		}
+		srvName := ""
+		if sess.Server != nil {
+			srvName = sess.Server.Name
+		}
+		status := 200
+		if report.Failed > 0 && report.OK == 0 {
+			status = 500
+		}
+		store := history.NewStore(history.GetHistoryPath(zoneRoot))
+		_ = store.Append(history.NewEntryFromResult(&types.Result{
+			Name:      ref,
+			Ref:       ref,
+			Method:    "GET",
+			Url:       report.Name,
+			Status:    status,
+			HasStatus: true,
+			Reason:    fmt.Sprintf("perf (%d completed)", report.Completed),
+			ElapsedMs: report.Percentile(0.95),
+		}, "perf", zoneName, srvName, nil))
 	}
 
 	if !jsonOutput && p.Color {
@@ -2171,6 +2477,9 @@ func cmdPerfWorker(args []string, globals *GlobalFlags, p *output.Printer) error
 	id := ""
 	hubURL := os.Getenv("HIT_HUB_URL")
 	hubToken := os.Getenv("HIT_HUB_TOKEN")
+	if hubToken == "" {
+		hubToken = os.Getenv("HIT_API_KEY")
+	}
 	advertiseURL := ""
 	capacity := 0
 	owner := os.Getenv("USER")
@@ -2262,8 +2571,14 @@ func cmdPerfWorker(args []string, globals *GlobalFlags, p *output.Printer) error
 }
 
 func cmdHub(args []string, p *output.Printer) error {
+	defaultKey := os.Getenv("HIT_API_KEY")
+	if defaultKey == "" {
+		defaultKey = os.Getenv("HIT_HUB_TOKEN")
+	}
 	cfg := hub.Config{
 		Addr:           ":8080",
+		APIKey:         defaultKey,
+		ProjectID:      os.Getenv("HIT_PROJECT_ID"),
 		DashboardTitle: "Hit Cloud Fleet Hub",
 	}
 
@@ -2490,31 +2805,62 @@ func cmdDispatch(args []string, globals *GlobalFlags, p *output.Printer) error {
 		return fmt.Errorf("usage: hit dispatch <FILE|URL|REF> [--hub URL] [--node ID] [--region REGION] [--perf] [-c CONC] [-n REQS]")
 	}
 
-	// Resolve spec YAML
+	// Resolve spec YAML and pre-render variables/auth from zone if available
 	specYAML := ""
+	z, _ := zone.FindOrNone(globals.Zone)
+	var loadedSp *spec.RequestSpec
 	if b, err := os.ReadFile(target); err == nil {
 		specYAML = string(b)
 		if runName == "" {
 			runName = filepath.Base(target)
 		}
+		var defaults []map[string]any
+		if z != nil {
+			defaults = z.DefaultsChain(target)
+		}
+		loadedSp, _ = spec.LoadSpec(target, defaults)
 	} else if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
 		specYAML = fmt.Sprintf("name: %q\nmethod: GET\nurl: %q\ntests:\n  - status < 400\n", target, target)
 		if runName == "" {
 			runName = target
 		}
-	} else {
-		// Attempt zone lookup if available
-		if z, err := zone.FindOrNone(globals.Zone); z != nil && err == nil {
-			specPath := filepath.Join(z.CollectionsDir(), target)
-			if !strings.HasSuffix(specPath, ".yaml") && !strings.HasSuffix(specPath, ".yml") {
-				specPath += ".yaml"
-			}
-			if b, err := os.ReadFile(specPath); err == nil {
+	} else if z != nil {
+		if reqPath, err := z.ResolveRequest(target); err == nil && reqPath != "" {
+			if b, err := os.ReadFile(reqPath); err == nil {
 				specYAML = string(b)
 				if runName == "" {
 					runName = target
 				}
 			}
+			loadedSp, _ = spec.LoadSpec(reqPath, z.DefaultsChain(reqPath))
+		}
+	}
+
+	if loadedSp != nil {
+		if sess, err := runner.NewSession(runner.SessionOptions{
+			Zone:         z,
+			ServerName:   globals.Server,
+			ExtraVars:    globals.Vars,
+			Persist:      false,
+			ZoneOptional: true,
+			Verify:       !globals.Insecure,
+			NoHistory:    true,
+		}); err == nil {
+			if renderedSp, prep, _, pErr := sess.Prepare(loadedSp, nil); pErr == nil && prep != nil {
+				spCopy := *renderedSp
+				spCopy.Url = prep.FullURL()
+				spCopy.Query = nil
+				spCopy.Auth = "none"
+				hdrs := make(map[string]any, len(prep.Headers))
+				for k, v := range prep.Headers {
+					hdrs[k] = v
+				}
+				spCopy.Headers = hdrs
+				if b, mErr := yaml.Marshal(&spCopy); mErr == nil {
+					specYAML = string(b)
+				}
+			}
+			sess.Close()
 		}
 	}
 
@@ -3096,7 +3442,9 @@ func cmdImport(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Z
 	}
 
 	// Auto-detect kind if first argument is a file, URL, or curl command
-	if kind != "collection" && kind != "env" && kind != "environment" && kind != "globals" && kind != "openapi" && kind != "swagger" && kind != "curl" {
+	if kind != "collection" && kind != "postman" && kind != "insomnia" &&
+		kind != "env" && kind != "environment" && kind != "globals" &&
+		kind != "openapi" && kind != "swagger" && kind != "oas" && kind != "curl" {
 		trimmed := strings.TrimSpace(kind)
 		if strings.HasPrefix(trimmed, "curl ") || strings.HasPrefix(trimmed, "curl\t") {
 			files = append([]string{kind}, files...)
@@ -3119,6 +3467,8 @@ func cmdImport(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Z
 		} else if strings.HasPrefix(kind, "http://") || strings.HasPrefix(kind, "https://") {
 			files = append([]string{kind}, files...)
 			kind = "openapi"
+		} else if kind != "" && (os.IsNotExist(err) && (len(files) == 0 || strings.Contains(kind, ".") || strings.Contains(kind, "/") || strings.Contains(kind, "\\"))) {
+			return zone.NewZoneError("import file not found: %s", kind)
 		}
 	}
 
@@ -3127,8 +3477,13 @@ func cmdImport(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Z
 	}
 
 	switch kind {
-	case "openapi", "swagger":
+	case "openapi", "swagger", "oas":
 		for _, f := range files {
+			if !strings.HasPrefix(f, "http://") && !strings.HasPrefix(f, "https://") {
+				if _, err := os.Stat(f); os.IsNotExist(err) {
+					return zone.NewZoneError("import file not found: %s", f)
+				}
+			}
 			report, err := importer.ImportOpenAPI(f, z.CollectionsDir(), nameOverride)
 			if err != nil {
 				return err
@@ -3159,11 +3514,17 @@ func cmdImport(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Z
 				relF, _ := filepath.Rel(z.Root, f)
 				p.Out(fmt.Sprintf("  created %s", relF))
 			}
+			for _, w := range report.Warnings {
+				p.Out(p.Yellow(fmt.Sprintf("  ! %s", w)))
+			}
 		}
 		return nil
 
-	case "collection":
+	case "collection", "postman", "insomnia":
 		for _, f := range files {
+			if _, err := os.Stat(f); os.IsNotExist(err) {
+				return zone.NewZoneError("import file not found: %s", f)
+			}
 			report, err := importer.ImportCollection(f, z.CollectionsDir(), nameOverride)
 			if err != nil {
 				return err
@@ -3180,27 +3541,13 @@ func cmdImport(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Z
 				for _, v := range report.Unconverted {
 					total += len(v)
 				}
-				p.Out(p.Yellow(fmt.Sprintf("  %d script line(s) in %d file(s) need hand porting (kept under 'unconverted:' in each file):", total, len(report.Unconverted))))
-				for rRef, lines := range report.Unconverted {
-					p.Out(fmt.Sprintf("    %s", rRef))
-					limit := 4
-					if len(lines) < limit {
-						limit = len(lines)
-					}
-					for i := 0; i < limit; i++ {
-						line := strings.TrimSpace(lines[i])
-						if len(line) > 110 {
-							line = line[:110]
-						}
-						p.Out(p.Dim(fmt.Sprintf("      %s", line)))
-					}
-					if len(lines) > 4 {
-						p.Out(p.Dim(fmt.Sprintf("      … %d more", len(lines)-4)))
-					}
-				}
+				p.Out(p.Yellow(fmt.Sprintf("  %d script line(s) in %d file(s) need hand porting (kept under 'unconverted:' in each file)", total, len(report.Unconverted))))
 			}
 		}
 		if globalsFile != "" {
+			if _, err := os.Stat(globalsFile); os.IsNotExist(err) {
+				return zone.NewZoneError("import file not found: %s", globalsFile)
+			}
 			n, err := importer.ImportGlobals(globalsFile, filepath.Join(z.Root, zone.ZoneFile))
 			if err != nil {
 				return err
@@ -3211,6 +3558,9 @@ func cmdImport(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Z
 
 	case "env", "environment":
 		for _, f := range files {
+			if _, err := os.Stat(f); os.IsNotExist(err) {
+				return zone.NewZoneError("import file not found: %s", f)
+			}
 			envPath, secPath, err := importer.ImportEnvironment(f, z.ServersDir(), nameOverride)
 			if err != nil {
 				return err
@@ -3226,6 +3576,9 @@ func cmdImport(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Z
 
 	case "globals":
 		for _, f := range files {
+			if _, err := os.Stat(f); os.IsNotExist(err) {
+				return zone.NewZoneError("import file not found: %s", f)
+			}
 			n, err := importer.ImportGlobals(f, filepath.Join(z.Root, zone.ZoneFile))
 			if err != nil {
 				return err
@@ -3325,6 +3678,15 @@ func cmdValidate(args []string, globals *GlobalFlags, p *output.Printer, z *zone
 				"error": err.Error(),
 			})
 			continue
+		}
+
+		if testErrs := assertions.ValidateTests(sp.Tests); len(testErrs) > 0 {
+			problems = append(problems, map[string]any{
+				"ref":   ref,
+				"file":  rel,
+				"kind":  "tests",
+				"error": strings.Join(testErrs, "; "),
+			})
 		}
 
 		_, _, _, err = sess.Prepare(sp, nil)
@@ -3499,6 +3861,7 @@ func cmdPolicy(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Z
 	if err != nil {
 		return err
 	}
+	rep.ApplyStrict(strictMode)
 
 	if junitPath != "" {
 		if err := rep.WriteJUnitReport(junitPath); err != nil {
@@ -3511,8 +3874,8 @@ func cmdPolicy(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Z
 	if jsonOutput {
 		b, _ := json.MarshalIndent(rep, "", "  ")
 		p.Out(string(b))
-		if !rep.Passed || (strictMode && len(rep.Violations) > 0) {
-			return zone.NewZoneError("policy check failed: %d violation(s) found", len(rep.Violations))
+		if !rep.Passed {
+			os.Exit(ExitFail)
 		}
 		return nil
 	}
@@ -3550,9 +3913,9 @@ func cmdPolicy(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Z
 	}
 
 	summary := fmt.Sprintf("Violations: %d error(s), %d warning(s) across %d file(s)", errCount, warnCount, rep.TotalFiles)
-	if !rep.Passed || (strictMode && warnCount > 0) {
+	if !rep.Passed {
 		p.Out(p.Red(p.Bold("Policy check failed: ")) + summary)
-		return zone.NewZoneError("policy check failed: %d violation(s)", len(rep.Violations))
+		os.Exit(ExitFail)
 	}
 
 	p.Out(p.Yellow(p.Bold("Policy passed with warnings: ")) + summary)
@@ -3735,6 +4098,24 @@ func cmdHistory(args []string, globals *GlobalFlags, p *output.Printer) error {
 			if err != nil {
 				return err
 			}
+			if infer && entry.Status >= 400 {
+				if recent, lErr := store.List(100, 0, entry.Method, ""); lErr == nil {
+					for _, cand := range recent {
+						if cand.ID != entry.ID && cand.Status >= 200 && cand.Status < 400 &&
+							(cand.Url == entry.Url || (entry.Ref != "" && cand.Ref == entry.Ref)) {
+							cp := *entry
+							cp.Status = cand.Status
+							cp.Reason = cand.Reason
+							cp.ElapsedMs = cand.ElapsedMs
+							cp.ResponseHeaders = cand.ResponseHeaders
+							cp.ResponseBody = cand.ResponseBody
+							cp.ResponseSize = cand.ResponseSize
+							entry = &cp
+							break
+						}
+					}
+				}
+			}
 			if z != nil && !filepath.IsAbs(targetFile) && !strings.HasPrefix(targetFile, "collections") {
 				targetFile = filepath.Join(z.CollectionsDir(), targetFile)
 			}
@@ -3912,6 +4293,8 @@ func cmdReplay(args []string, globals *GlobalFlags, p *output.Printer) error {
 		compareHeaders  bool
 		bodyOnly        bool
 		jsonOut         bool
+		dryRun          bool
+		yesFlag         bool
 		contextLines    = 3
 		overrideHeaders = make(map[string]any)
 	)
@@ -3927,6 +4310,10 @@ func cmdReplay(args []string, globals *GlobalFlags, p *output.Printer) error {
 			bodyOnly = true
 		case arg == "--json":
 			jsonOut = true
+		case arg == "--dry-run":
+			dryRun = true
+		case arg == "--yes" || arg == "-y":
+			yesFlag = true
 		case arg == "--context" && i+1 < len(args):
 			if n, err := strconv.Atoi(args[i+1]); err == nil && n > 0 {
 				contextLines = n
@@ -3948,7 +4335,7 @@ func cmdReplay(args []string, globals *GlobalFlags, p *output.Printer) error {
 	}
 
 	if idOrIdx == "" {
-		return zone.NewZoneError("usage: hit replay <ID|INDEX> [-s SERVER] [--var k=v] [-H k:v] [--diff] [--headers] [--body-only] [--json]")
+		return zone.NewZoneError("usage: hit replay <ID|INDEX> [-s SERVER] [--var k=v] [-H k:v] [--diff] [--headers] [--body-only] [--dry-run] [--yes] [--json]")
 	}
 	z, _ := zone.FindOrNone(globals.Zone)
 	zoneRoot := ""
@@ -3961,18 +4348,49 @@ func cmdReplay(args []string, globals *GlobalFlags, p *output.Printer) error {
 		return err
 	}
 
+	mUpper := strings.ToUpper(strings.TrimSpace(entry.Method))
+	isMutating := mUpper == "POST" || mUpper == "PUT" || mUpper == "DELETE" || mUpper == "PATCH"
+
+	if dryRun {
+		if jsonOut {
+			b, _ := json.MarshalIndent(map[string]any{
+				"dry_run": true,
+				"id":      entry.ID,
+				"method":  entry.Method,
+				"url":     entry.Url,
+				"headers": entry.Headers,
+				"body":    entry.Body,
+			}, "", "  ")
+			p.Out(string(b))
+			return nil
+		}
+		p.Out(p.Bold(fmt.Sprintf("Dry-run replay for %s: %s %s", entry.ID, entry.Method, entry.Url)))
+		if len(entry.Headers) > 0 {
+			for k, v := range entry.Headers {
+				p.Out(fmt.Sprintf("  %s: %s", k, v))
+			}
+		}
+		if entry.Body != "" {
+			p.Out(fmt.Sprintf("\n  %s", entry.Body))
+		}
+		return nil
+	}
+
 	if !jsonOut {
+		if isMutating && !yesFlag {
+			fmt.Fprintf(os.Stderr, "%s\n", p.Yellow(fmt.Sprintf("  ⚠ Replaying mutating %s request to %s (pass --dry-run to preview)", mUpper, entry.Url)))
+		}
 		p.Out(p.Dim(fmt.Sprintf("replaying hit %s: %s %s", entry.ID, entry.Method, entry.Url)))
 	}
 
 	sess, err := runner.NewSession(runner.SessionOptions{
-		Zone:              z,
-		ServerName:        globals.Server,
-		ExtraVars:         globals.Vars,
-		Persist:           true,
-		ZoneOptional:      true,
-		Verify:            !globals.Insecure,
-		NoHistory:         globals.NoHistory,
+		Zone:         z,
+		ServerName:   globals.Server,
+		ExtraVars:    globals.Vars,
+		Persist:      true,
+		ZoneOptional: true,
+		Verify:       !globals.Insecure,
+		NoHistory:    globals.NoHistory,
 	})
 	if err != nil {
 		return err
@@ -3990,12 +4408,17 @@ func cmdReplay(args []string, globals *GlobalFlags, p *output.Printer) error {
 
 	if r == nil {
 		var headers map[string]any
+		hadMaskedAuth := false
 		if len(entry.Headers) > 0 {
 			headers = make(map[string]any)
 			for k, v := range entry.Headers {
-				if v != "[MASKED]" {
-					headers[k] = v
+				if v == "[MASKED]" || v == "********" {
+					if strings.EqualFold(k, "Authorization") || strings.EqualFold(k, "X-API-Key") || strings.EqualFold(k, "Cookie") {
+						hadMaskedAuth = true
+					}
+					continue
 				}
+				headers[k] = v
 			}
 		}
 		for k, v := range overrideHeaders {
@@ -4003,6 +4426,29 @@ func cmdReplay(args []string, globals *GlobalFlags, p *output.Printer) error {
 				headers = make(map[string]any)
 			}
 			headers[k] = v
+			if strings.EqualFold(k, "Authorization") {
+				hadMaskedAuth = false
+			}
+		}
+
+		var authCfg any
+		if hadMaskedAuth && (sess.Server == nil || sess.Server.Auth == nil) {
+			vars := sess.Variables()
+			for _, key := range []string{"token", "access_token", "auth_token", "jwt", "api_key"} {
+				if val, ok := vars[key]; ok {
+					if s, ok := val.(string); ok && s != "" && s != "[MASKED]" && s != "********" {
+						authCfg = map[string]any{"type": "bearer", "token": s}
+						break
+					}
+				}
+			}
+			if authCfg == nil {
+				if envTok := os.Getenv("HIT_TOKEN"); envTok != "" {
+					authCfg = map[string]any{"type": "bearer", "token": envTok}
+				} else if envKey := os.Getenv("HIT_API_KEY"); envKey != "" {
+					authCfg = map[string]any{"type": "bearer", "token": envKey}
+				}
+			}
 		}
 
 		var body any
@@ -4021,7 +4467,7 @@ func cmdReplay(args []string, globals *GlobalFlags, p *output.Printer) error {
 			tests = append(tests, map[string]any{"status": entry.Status})
 		}
 
-		r = sess.Request(entry.Method, entry.Url, headers, nil, body, jsonBody, nil, nil, tests, nil, nil, entry.Ref)
+		r = sess.Request(entry.Method, entry.Url, headers, nil, body, jsonBody, nil, authCfg, tests, nil, nil, entry.Ref)
 	}
 
 	if !diffMode {
@@ -4276,20 +4722,27 @@ func cmdReport(args []string, globals *GlobalFlags, p *output.Printer) error {
 	case "coverage":
 		specFile := ""
 		jsonOutput := false
+		strictMode := false
 		for i := 0; i < len(subArgs); i++ {
 			a := subArgs[i]
 			if (a == "-s" || a == "--openapi" || a == "--spec") && i+1 < len(subArgs) {
 				specFile = subArgs[i+1]
 				i++
+			} else if strings.HasPrefix(a, "--openapi=") {
+				specFile = strings.TrimPrefix(a, "--openapi=")
+			} else if strings.HasPrefix(a, "--spec=") {
+				specFile = strings.TrimPrefix(a, "--spec=")
 			} else if a == "--json" {
 				jsonOutput = true
+			} else if a == "--strict" {
+				strictMode = true
 			} else if !strings.HasPrefix(a, "-") {
 				specFile = a
 			}
 		}
 
 		if specFile == "" {
-			return zone.NewZoneError("usage: hit report coverage --openapi <SPEC.yaml|url>")
+			return zone.NewZoneError("usage: hit report coverage --openapi <SPEC.yaml|url> [--strict] [--json]")
 		}
 
 		data, err := report.LoadSpecData(specFile)
@@ -4305,10 +4758,12 @@ func cmdReport(args []string, globals *GlobalFlags, p *output.Printer) error {
 		if jsonOutput {
 			b, _ := json.MarshalIndent(rep, "", "  ")
 			p.Out(string(b))
-			return nil
+		} else {
+			p.Out(report.FormatCoverageTable(rep, p.Color))
 		}
-
-		p.Out(report.FormatCoverageTable(rep, p.Color))
+		if strictMode && len(rep.Untested) > 0 {
+			os.Exit(ExitFail)
+		}
 		return nil
 
 	case "latency", "perf", "trends":
@@ -6075,7 +6530,7 @@ Git-Native Synthetic API Monitoring & Multi-Region Incident Alerting
 Subcommands:
   run <file|ref>        Run immediate multi-region consensus check
   daemon <file>         Run continuous monitoring daemon with automated incident alerting
-  test-alert <file>     Send test alert to configured channels (PagerDuty, Slack, Opsgenie)
+  test-alert <file>     Send test alert to configured channels (PagerDuty, Slack, Opsgenie, Webhook)
 
 Flags:
   --regions LIST        Comma-separated regions (default: us-east,eu-central,ap-southeast)
@@ -6083,7 +6538,7 @@ Flags:
   --sla-latency DURATION Maximum allowed latency SLA (e.g. 500ms, 1s)
   --interval DURATION   Polling interval for daemon mode (default: 60s)
   -n, --count INT       Number of iterations to run in daemon mode (default: infinite)
-  --channel NAME        Channel to test in test-alert (all, slack, pagerduty, opsgenie)
+  --channel NAME        Channel to test in test-alert (all, slack, pagerduty, opsgenie, webhook)
   --json                Output results as JSON
   -q, --quiet           Suppress non-essential output
   -v, --verbose         Verbose output`)
@@ -6194,8 +6649,8 @@ func cmdProbeRun(args []string, globals *GlobalFlags, p *output.Printer) error {
 	if !quiet && !jsonOutput {
 		p.Out(fmt.Sprintf("%s Synthetic API Probe: %s (%s)",
 			p.Cyan("🎯"), p.Bold(cfg.Name), p.Dim(cfg.Ref)))
-		p.Out(fmt.Sprintf("   Regions: %s | Consensus Threshold: %d/%d",
-			strings.Join(cfg.Regions, ", "), cfg.ConsensusThreshold, len(cfg.Regions)))
+		p.Out(fmt.Sprintf("   Regions: %s %s | Consensus Threshold: %d/%d",
+			strings.Join(cfg.Regions, ", "), p.Dim("(simulated locally via X-Hit-Probe-Region)"), cfg.ConsensusThreshold, len(cfg.Regions)))
 		if cfg.SLA.MaxLatency > 0 {
 			p.Out(fmt.Sprintf("   SLA Latency Ceiling: %v", cfg.SLA.MaxLatency))
 		}
@@ -6235,8 +6690,13 @@ func cmdProbeRun(args []string, globals *GlobalFlags, p *output.Printer) error {
 			}
 		}
 
-		p.Out(fmt.Sprintf("   %s [%-12s] %s (%6.1fms)%s",
-			icon, c.Region, statusStr, c.ElapsedMs, errDetail))
+		simLabel := ""
+		if c.Simulated {
+			simLabel = " " + p.Dim("[simulated]")
+		}
+
+		p.Out(fmt.Sprintf("   %s [%-12s]%s %s (%6.1fms)%s",
+			icon, c.Region, simLabel, statusStr, c.ElapsedMs, errDetail))
 	}
 
 	p.Out("")
@@ -6263,6 +6723,9 @@ func cmdProbeDaemon(args []string, globals *GlobalFlags, p *output.Printer) erro
 	quiet := false
 	hubURL := os.Getenv("HIT_HUB_URL")
 	hubToken := os.Getenv("HIT_HUB_TOKEN")
+	if hubToken == "" {
+		hubToken = os.Getenv("HIT_API_KEY")
+	}
 	region := "local"
 	nodeID := ""
 	owner := os.Getenv("USER")
@@ -6395,7 +6858,7 @@ func cmdProbeDaemon(args []string, globals *GlobalFlags, p *output.Printer) erro
 
 	if !quiet && !jsonOutput {
 		p.Out(fmt.Sprintf("%s Starting synthetic probe daemon: %s", p.Cyan("📡"), p.Bold(cfg.Name)))
-		p.Out(fmt.Sprintf("   Target: %s | Interval: %v | Regions: %v", cfg.Ref, cfg.Interval, cfg.Regions))
+		p.Out(fmt.Sprintf("   Target: %s | Interval: %v | Regions: %v %s", cfg.Ref, cfg.Interval, cfg.Regions, p.Dim("(simulated locally via X-Hit-Probe-Region)")))
 		p.Out(fmt.Sprintf("   Consensus Threshold: %d/%d failures", cfg.ConsensusThreshold, len(cfg.Regions)))
 		if hubURL != "" {
 			p.Out(fmt.Sprintf("   Fleet Enrollment: Enrolled in Hub %s (node: %s)", p.Cyan(hubURL), p.Bold(nodeID)))
@@ -6409,6 +6872,9 @@ func cmdProbeDaemon(args []string, globals *GlobalFlags, p *output.Printer) erro
 		}
 		if cfg.Alerts.Opsgenie != nil {
 			channels = append(channels, "Opsgenie")
+		}
+		if cfg.Alerts.Webhook != nil {
+			channels = append(channels, "Webhook")
 		}
 		if len(channels) > 0 {
 			p.Out(fmt.Sprintf("   Alert Channels: %s", strings.Join(channels, ", ")))
@@ -6427,6 +6893,7 @@ func cmdProbeDaemon(args []string, globals *GlobalFlags, p *output.Printer) erro
 		evt, _ := probe.HandleStateTransition(state, res, cfg, httpClient)
 
 		if hubURL != "" {
+			trimmedHub := strings.TrimRight(hubURL, "/")
 			hbState := "idle"
 			if res.Status == probe.StatusIncident {
 				hbState = "degraded"
@@ -6442,7 +6909,7 @@ func cmdProbeDaemon(args []string, globals *GlobalFlags, p *output.Printer) erro
 				},
 			}
 			hbBytes, _ := json.Marshal(hbPayload)
-			hbReq, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/api/v1/nodes/%s/heartbeat", strings.TrimRight(hubURL, "/"), nodeID), bytes.NewReader(hbBytes))
+			hbReq, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/api/v1/nodes/%s/heartbeat", trimmedHub, nodeID), bytes.NewReader(hbBytes))
 			if err == nil {
 				hbReq.Header.Set("Content-Type", "application/json")
 				if hubToken != "" {
@@ -6450,6 +6917,55 @@ func cmdProbeDaemon(args []string, globals *GlobalFlags, p *output.Printer) erro
 				}
 				if resp, err := httpClient.Do(hbReq); err == nil {
 					resp.Body.Close()
+				}
+			}
+
+			// Report probe check result to Hub /api/v1/probes
+			probeRec := map[string]any{
+				"node_id":        nodeID,
+				"probe_name":     res.ProbeName,
+				"status":         string(res.Status),
+				"passed_regions": res.PassedRegions,
+				"failed_regions": res.FailedRegions,
+				"total_regions":  res.TotalRegions,
+				"summary":        res.Summary,
+				"timestamp":      res.Timestamp,
+				"checks":         res.Checks,
+			}
+			if prBytes, mErr := json.Marshal(probeRec); mErr == nil {
+				if prReq, rErr := http.NewRequest(http.MethodPost, trimmedHub+"/api/v1/probes", bytes.NewReader(prBytes)); rErr == nil {
+					prReq.Header.Set("Content-Type", "application/json")
+					if hubToken != "" {
+						prReq.Header.Set("Authorization", "Bearer "+hubToken)
+					}
+					if resp, dErr := httpClient.Do(prReq); dErr == nil {
+						resp.Body.Close()
+					}
+				}
+			}
+
+			// Report incident transitions to Hub /api/v1/incidents
+			if evt != nil && (evt.Action == "TRIGGER" || evt.Action == "RESOLVE") {
+				incRec := map[string]any{
+					"node_id":    nodeID,
+					"probe_name": res.ProbeName,
+					"action":     evt.Action,
+					"status":     string(res.Status),
+					"dedup_key":  state.IncidentDedupKey,
+					"summary":    evt.Summary,
+					"notified":   evt.Notified,
+					"timestamp":  res.Timestamp,
+				}
+				if incBytes, mErr := json.Marshal(incRec); mErr == nil {
+					if incReq, rErr := http.NewRequest(http.MethodPost, trimmedHub+"/api/v1/incidents", bytes.NewReader(incBytes)); rErr == nil {
+						incReq.Header.Set("Content-Type", "application/json")
+						if hubToken != "" {
+							incReq.Header.Set("Authorization", "Bearer "+hubToken)
+						}
+						if resp, dErr := httpClient.Do(incReq); dErr == nil {
+							resp.Body.Close()
+						}
+					}
 				}
 			}
 		}
@@ -6556,7 +7072,7 @@ func cmdProbeTestAlert(args []string, globals *GlobalFlags, p *output.Printer) e
 	}
 
 	if target == "" {
-		return fmt.Errorf("usage: hit probe test-alert <probe.yaml> [--channel all|slack|pagerduty|opsgenie]")
+		return fmt.Errorf("usage: hit probe test-alert <probe.yaml> [--channel all|slack|pagerduty|opsgenie|webhook]")
 	}
 
 	cfg, err := probe.LoadProbeConfig(target)
@@ -6622,9 +7138,27 @@ func cmdProbeTestAlert(args []string, globals *GlobalFlags, p *output.Printer) e
 		}
 	}
 
+	if (channel == "all" || channel == "webhook") && cfg.Alerts.Webhook != nil && cfg.Alerts.Webhook.URL != "" {
+		tested++
+		whURL := probe.ResolveSecret(cfg.Alerts.Webhook.URL)
+		if whURL == "" {
+			p.Out(p.Red(fmt.Sprintf("✘ Webhook: URL unresolved (%s)", cfg.Alerts.Webhook.URL)))
+		} else {
+			details := []string{
+				"• Test verification message sent via `hit probe test-alert`.",
+			}
+			err := probe.SendWebhook(httpClient, cfg.Alerts.Webhook.URL, "test", cfg.Name, fmt.Sprintf("Test Alert: %s synthetic probe verification", cfg.Name), "hit-test-alert", nil, details)
+			if err != nil {
+				p.Out(p.Red(fmt.Sprintf("✘ Webhook: failed to dispatch: %v", err)))
+			} else {
+				p.Out(p.Green("✔ Webhook: JSON test payload delivered successfully"))
+			}
+		}
+	}
+
 	if tested == 0 {
 		p.Out(p.Yellow("⚠ No alert channels matched or configured in probe specification."))
-		p.Out("  Add 'alerts:' section with 'pagerduty:', 'slack:', or 'opsgenie:' in the probe YAML.")
+		p.Out("  Add 'alerts:' section with 'pagerduty:', 'slack:', 'opsgenie:', or 'webhook:' in the probe YAML.")
 	}
 
 	return nil

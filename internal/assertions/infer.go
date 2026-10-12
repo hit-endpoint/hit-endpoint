@@ -232,7 +232,6 @@ func inferObjectMatchers(prefix string, obj map[string]any, matchers map[string]
 
 		switch val := v.(type) {
 		case string:
-			lowerKey := strings.ToLower(k)
 			if uuidRegex.MatchString(val) {
 				matchers[path] = map[string]any{
 					"type":    "string",
@@ -248,10 +247,7 @@ func inferObjectMatchers(prefix string, obj map[string]any, matchers map[string]
 					"type":    "string",
 					"matches": `^[^@]+@[^@]+\.[^@]+$`,
 				}
-			} else if opts.Strict {
-				matchers[path] = val
-			} else if lowerKey == "status" || lowerKey == "state" || lowerKey == "type" || lowerKey == "kind" || lowerKey == "role" {
-				// High-value semantic enum-like property: test exact value or non-empty string
+			} else if opts.Strict || (prefix == "" && (strings.EqualFold(k, "status") || strings.EqualFold(k, "role")) && len(val) > 0 && len(val) <= 16 && !strings.Contains(val, " ")) {
 				matchers[path] = val
 			} else {
 				matchers[path] = map[string]any{
