@@ -14,6 +14,20 @@ A fast, compiled Go CLI delivering **23 production-ready testing features** in a
 
 ---
 
+## ⚡ Why `hit`? (Time Saved vs. `curl` & Coding Agents)
+
+| Workflow | Raw `curl` + `jq` | Coding Agent Alone | Hit Endpoint (`hit`) |
+| :--- | :--- | :--- | :--- |
+| **1. Everyday Ad Hoc Requests**<br>*(Inspect, save history, replay & diff)* | **~2–5 min** typing `-s -w -H`, piping `jq`, and losing responses in terminal scrollback | **~30–90 sec** waiting on LLM round-trips just to fire a request and format the output | **< 1 sec** (`hit <URL> -j '{...}'`) — auto-formatted output + every call is **auto-saved to history** for instant `hit replay 1`, `hit diff 1 2`, or promoting to YAML |
+| **2. Auth & Chained Flows**<br>*(Login $\to$ capture token $\to$ call API)* | **~5–10 min** piping `jq`, exporting shell vars, and escaping quotes | **~1–3 min** waiting on LLM inference to write a one-off script (often leaking tokens into chat) | **< 1 sec** (`hit run smoke`) — built-in `capture:` & `servers/` auth with automatic secret masking |
+| **3. Contract & SLA Assertions**<br>*(Validate status, types & latency)* | **~10 min** writing brittle `jq -e` filters and bash exit-code wrappers | **~2 min** prompting the agent to inspect a response and generate test boilerplate | **~2 sec** (`hit assert <URL> --save`) — auto-infers passing assertions from a live response |
+| **4. Load Benchmarking**<br>*(Concurrency + p95/p99 gates)* | **~15+ min** installing `k6`/`wrk` and rewriting requests in a separate tool | **~3–5 min** generating custom async scripts with inconsistent percentile math | **Instant** (`hit perf <REF> -c 50 --check "p95<200ms"`) — reuses your existing request YAML |
+| **5. Security & Edge-Case Fuzzing**<br>*(SQLi, XSS, boundary mutations)* | **~20+ min** hand-crafting malformed payloads one request at a time | **~3–5 min** prompting for test vectors and running sequential checks | **~3 sec** (`hit fuzz <REF>`) — 6 built-in mutation strategies with instant anomaly detection |
+
+> 🤝 **Better Together with Coding Agents**: When paired with an AI Coding Agent via `hit mcp` or `--agent`, your agent executes a single deterministic `hit` command in milliseconds instead of spending 60+ seconds and thousands of tokens writing throwaway Python or `curl` scripts.
+
+---
+
 ## 🚀 Quick Start
 
 ### Overview
