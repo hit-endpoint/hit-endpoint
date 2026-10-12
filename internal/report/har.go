@@ -134,7 +134,7 @@ type HARTimings struct {
 const (
 	HARVersion     = "1.2"
 	HARCreatorName = "hit-api-tester"
-	HARCreatorVer  = "0.1.0"
+	HARCreatorVer  = "1.1.0"
 )
 
 func newBaseHAR() *HAR {

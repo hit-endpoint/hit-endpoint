@@ -82,7 +82,7 @@ func SendPagerDuty(client *http.Client, endpoint, routingKey, action, dedupKey, 
 		return fmt.Errorf("failed to create pagerduty request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "hit/0.1.0 (synthetic-probe)")
+	req.Header.Set("User-Agent", "hit/1.1.0 (synthetic-probe)")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -314,7 +314,7 @@ func SendWebhook(client *http.Client, webhookURL, action, probeName, summary, de
 		return fmt.Errorf("failed to create webhook request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "hit/0.1.0 (synthetic-probe)")
+	req.Header.Set("User-Agent", "hit/1.1.0 (synthetic-probe)")
 
 	resp, err := client.Do(req)
 	if err != nil {

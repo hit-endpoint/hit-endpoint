@@ -19,7 +19,7 @@ import (
 	"github.com/hit-endpoint/hit-endpoint/internal/zone"
 )
 
-const Version = "0.1.0"
+const Version = "1.1.0"
 
 type Check struct {
 	Status string `json:"status"` // ok | warn | fail | info

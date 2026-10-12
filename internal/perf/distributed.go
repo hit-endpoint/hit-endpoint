@@ -616,7 +616,7 @@ func (ws *WorkerServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 		ID:      ws.ID,
 		Region:  ws.Region,
 		Status:  ws.status,
-		Version: "0.1.0",
+		Version: "1.1.0",
 	}
 	if ws.err != nil {
 		st.Error = ws.err.Error()

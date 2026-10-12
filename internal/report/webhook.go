@@ -112,7 +112,7 @@ func SendFailureWebhookWithClient(client *http.Client, webhookURL string, result
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "hit/0.1.0 (failure-webhook)")
+	req.Header.Set("User-Agent", "hit/1.1.0 (failure-webhook)")
 
 	resp, err := client.Do(req)
 	if err != nil {

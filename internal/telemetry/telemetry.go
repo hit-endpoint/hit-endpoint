@@ -417,7 +417,7 @@ func PublishRun(ctx context.Context, client *http.Client, cfg PublishConfig, pay
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "hit/0.1.0 (cloud-telemetry)")
+	req.Header.Set("User-Agent", "hit/1.1.0 (cloud-telemetry)")
 	if cfg.APIKey != "" {
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", cfg.APIKey))
 	}

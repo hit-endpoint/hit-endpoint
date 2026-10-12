@@ -10,8 +10,8 @@ Security updates and patches are actively maintained for the following versions:
 
 | Version | Supported | Notes |
 | :--- | :---: | :--- |
-| `v0.1.x` | :white_check_mark: | Current active release branch |
-| `< v0.1.0` | :x: | Prerelease and developmental versions (unsupported) |
+| `v1.1.x` | :white_check_mark: | Current active release branch |
+| `< v1.1.0` | :x: | Older and prerelease versions (unsupported) |
 
 If you are using an older version, we strongly recommend updating to the latest stable release via:
 ```bash

@@ -85,8 +85,8 @@ func TestSendFailureWebhook(t *testing.T) {
 	if receivedContentType != "application/json" {
 		t.Errorf("expected Content-Type application/json, got %s", receivedContentType)
 	}
-	if receivedUserAgent != "hit/0.1.0 (failure-webhook)" {
-		t.Errorf("expected User-Agent hit/0.1.0 (failure-webhook), got %s", receivedUserAgent)
+	if receivedUserAgent != "hit/1.1.0 (failure-webhook)" {
+		t.Errorf("expected User-Agent hit/1.1.0 (failure-webhook), got %s", receivedUserAgent)
 	}
 
 	if receivedPayload.Event != "hit.run.failure" {

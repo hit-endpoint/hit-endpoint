@@ -745,9 +745,9 @@ func (s *Session) runSingleSpec(sp *spec.RequestSpec, step map[string]any) *type
 		req.Header.Set(k, v)
 	}
 	if req.Header.Get("User-Agent") == "" {
-		req.Header.Set("User-Agent", "hit/0.1.0")
+		req.Header.Set("User-Agent", "hit/1.1.0")
 		if result.RequestHeaders != nil {
-			result.RequestHeaders["User-Agent"] = "hit/0.1.0"
+			result.RequestHeaders["User-Agent"] = "hit/1.1.0"
 		}
 	}
 

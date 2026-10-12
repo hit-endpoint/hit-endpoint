@@ -14,7 +14,7 @@ const (
 	SarifSchemaVersion = "2.1.0"
 	SarifSchemaURI     = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json"
 	HitToolName        = "hit-fuzz"
-	HitToolVersion     = "0.1.0"
+	HitToolVersion     = "1.1.0"
 	HitInformationURI  = "https://github.com/hit-endpoint/hit"
 )
 
