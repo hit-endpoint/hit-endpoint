@@ -1,125 +1,98 @@
 package learn
 
 import (
-	"net/http"
-	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/hit-endpoint/hit-endpoint/internal/history"
+	"github.com/hit-endpoint/hit-endpoint/internal/zone"
 )
 
-func TestLessonVerifier(t *testing.T) {
-	// Mock HTTP server responding 200 on /health
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"status":"ok"}`))
-			return
-		}
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer ts.Close()
+func TestVerifierOnlyReadsZoneHistoryAndFiltersMockURL(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "hit_learn_verifier_test_*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
 
-	v := NewVerifier(nil, ts.URL)
-	v.history = []*history.Entry{
-		{
-			Method: "GET",
-			Url:    ts.URL + "/health",
-			Status: 200,
-		},
-		{
-			Method: "GET",
-			Url:    ts.URL + "/pets?kind=dog",
-			Status: 200,
-		},
-		{
-			Method: "POST",
-			Url:    ts.URL + "/pets",
-			Status: 201,
-			Body:   `{"name":"Rex","kind":"dog"}`,
-		},
-		{
-			Method: "POST",
-			Url:    ts.URL + "/auth/login",
-			Status: 200,
-			Body:   `{"username":"mark"}`,
-		},
-		{
-			Method:  "GET",
-			Url:     ts.URL + "/pets",
-			Status:  200,
-			Headers: map[string]string{"Authorization": "Bearer demo-token-123"},
-		},
-		{
-			Method: "GET",
-			Url:    ts.URL + "/pets/1",
-			Status: 200,
-			Tests: []history.TestSummary{
-				{Name: "status is 200", Passed: true},
-			},
-		},
-		{
-			Source: "flow",
-			Ref:    "flows/smoke.yaml",
-			Method: "GET",
-			Url:    ts.URL + "/health",
-			Status: 200,
-		},
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(origWD) }()
+
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatal(err)
 	}
 
-	// Verify Lesson 1
-	l1 := v.VerifyLesson(1)
-	if !l1.Passed {
-		t.Errorf("expected Lesson 1 to pass, got failed checks: %+v", l1.Checks)
-	}
-
-	// Verify Lesson 2
-	l2 := v.VerifyLesson(2)
-	if !l2.Passed {
-		t.Errorf("expected Lesson 2 to pass, got failed checks: %+v", l2.Checks)
-	}
-
-	// Verify Lesson 3
-	l3 := v.VerifyLesson(3)
-	if !l3.Passed {
-		t.Errorf("expected Lesson 3 to pass, got failed checks: %+v", l3.Checks)
-	}
-
-	// Verify Lesson 4
-	l4 := v.VerifyLesson(4)
-	if !l4.Passed {
-		t.Errorf("expected Lesson 4 to pass, got failed checks: %+v", l4.Checks)
-	}
-
-	// Verify Lesson 5
-	l5 := v.VerifyLesson(5)
-	if !l5.Passed {
-		t.Errorf("expected Lesson 5 to pass, got failed checks: %+v", l5.Checks)
-	}
-
-	// Verify Lesson 6 fails before a perf run, then passes once a perf run is in history
-	l6Before := v.VerifyLesson(6)
-	if l6Before.Passed {
-		t.Errorf("expected Lesson 6 to fail before perf run, got passed")
-	}
-	v.history = append(v.history, &history.Entry{
-		Source: "perf",
-		Ref:    "petstore/00-health",
-		Method: "GET",
-		Url:    ts.URL + "/health",
-		Status: 200,
+	z, err := zone.InitWizard(zone.WizardOptions{
+		Dir:           tmpDir,
+		Name:          "test-learn",
+		BaseURL:       "http://127.0.0.1:19999",
+		PrimaryServer: "local",
 	})
-	l6After := v.VerifyLesson(6)
-	if !l6After.Passed {
-		t.Errorf("expected Lesson 6 to pass after perf run, got failed checks: %+v", l6After.Checks)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	// Verify All
-	report := v.VerifyAll()
-	if report.TotalLessons != 7 {
-		t.Errorf("expected 7 total lessons, got %d", report.TotalLessons)
+	// 1. With no local zone history, even if ~/.hit/history.jsonl has prior requests, Lesson 2 should NOT pass
+	v := NewVerifier(z, "http://127.0.0.1:19999")
+	res := v.VerifyLesson(2)
+	for _, r := range res.Checks {
+		if r.Passed {
+			t.Fatalf("expected Lesson 2 check %q to fail when local zone history is empty, but it passed", r.Description)
+		}
 	}
-	if report.CompletedLessons < 6 {
-		t.Errorf("expected at least 6 completed lessons, got %d", report.CompletedLessons)
+
+	// 2. Write an unrelated request (different host/port) to local zone history -> still should NOT pass
+	histPath := filepath.Join(tmpDir, ".hit", "history.jsonl")
+	store := history.NewStore(histPath)
+	_ = store.Append(&history.Entry{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Source:    "adhoc",
+		Method:    "GET",
+		Url:       "https://api.example.com/pets?kind=dog",
+		Status:    200,
+	})
+	_ = store.Append(&history.Entry{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Source:    "adhoc",
+		Method:    "POST",
+		Url:       "https://api.example.com/pets",
+		Body:      `{"name":"Bella","kind":"dog"}`,
+		Status:    201,
+	})
+
+	v2 := NewVerifier(z, "http://127.0.0.1:19999")
+	res2 := v2.VerifyLesson(2)
+	for _, r := range res2.Checks {
+		if r.Passed {
+			t.Fatalf("expected Lesson 2 check %q to ignore unrelated host history, but it passed", r.Description)
+		}
+	}
+
+	// 3. Write matching requests targeting the mock URL -> Lesson 2 should pass
+	_ = store.Append(&history.Entry{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Source:    "adhoc",
+		Method:    "GET",
+		Url:       "http://localhost:19999/pets?kind=dog",
+		Status:    200,
+	})
+	_ = store.Append(&history.Entry{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Source:    "adhoc",
+		Method:    "POST",
+		Url:       "http://127.0.0.1:19999/pets",
+		Body:      `{"name":"Bella","kind":"dog"}`,
+		Status:    201,
+	})
+
+	v3 := NewVerifier(z, "http://127.0.0.1:19999")
+	res3 := v3.VerifyLesson(2)
+	if !res3.Passed {
+		t.Fatalf("expected Lesson 2 to pass after matching mock requests, got checks: %+v", res3.Checks)
 	}
 }

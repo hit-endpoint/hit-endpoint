@@ -307,3 +307,38 @@ func TestImportGlobals(t *testing.T) {
 		t.Errorf("expected gKey == gVal")
 	}
 }
+
+func TestImportPetstoreCollectionConvertsAllScripts(t *testing.T) {
+	srcFile := filepath.Join("..", "..", "examples", "collection-import", "petstore.collection.json")
+	if _, err := os.Stat(srcFile); err != nil {
+		t.Skipf("example file not found: %v", err)
+	}
+	tmpDir, err := os.MkdirTemp("", "hit_test_petstore_import_*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	collDir := filepath.Join(tmpDir, "collections")
+	rep, err := ImportCollection(srcFile, collDir, "")
+	if err != nil {
+		t.Fatalf("ImportCollection failed: %v", err)
+	}
+	if len(rep.Unconverted) != 0 {
+		t.Errorf("expected 0 unconverted scripts in petstore.collection.json, got %v", rep.Unconverted)
+	}
+
+	dest := filepath.Join(collDir, "petstore")
+	listPets, err := zone.LoadYAML(filepath.Join(dest, "02-pets", "01-list-pets.yaml"))
+	if err != nil {
+		t.Fatalf("failed to load 01-list-pets.yaml: %v", err)
+	}
+	if _, hasUnc := listPets["unconverted"]; hasUnc {
+		t.Errorf("expected no unconverted key in 01-list-pets.yaml, got: %v", listPets["unconverted"])
+	}
+	tests, ok := listPets["tests"].([]any)
+	if !ok || len(tests) < 3 {
+		t.Errorf("expected at least 3 converted tests in 01-list-pets.yaml, got: %v", listPets["tests"])
+	}
+}
+

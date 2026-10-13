@@ -31,6 +31,7 @@ type Server struct {
 	nextID        int
 	chaos         *ChaosEngine
 	openAPIEngine *OpenAPIMockEngine
+	startedAt     time.Time
 }
 
 func NewServer() *Server {
@@ -43,8 +44,9 @@ func NewChaosServer(opts ChaosOptions) *Server {
 			1: {ID: 1, Name: "Rex", Kind: "dog", Age: 3},
 			2: {ID: 2, Name: "Tom", Kind: "cat", Age: 5},
 		},
-		nextID: 3,
-		chaos:  NewChaosEngine(opts),
+		nextID:    3,
+		chaos:     NewChaosEngine(opts),
+		startedAt: time.Now().UTC(),
 	}
 }
 
@@ -65,6 +67,7 @@ func NewOpenAPIServer(specPathOrURL string, chaos ChaosOptions, stateful bool) (
 		pets:          make(map[int]Pet),
 		chaos:         chaosEngine,
 		openAPIEngine: engine,
+		startedAt:     time.Now().UTC(),
 	}, nil
 }
 
@@ -336,9 +339,14 @@ func (s *Server) handleEcho(w http.ResponseWriter, r *http.Request, u *url.URL) 
 
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, parts []string, u *url.URL) {
 	if len(parts) == 1 && parts[0] == "health" {
+		startedAt := s.startedAt
+		if startedAt.IsZero() {
+			startedAt = time.Now().UTC()
+		}
 		s.sendJSON(w, http.StatusOK, map[string]any{
-			"status": "ok",
-			"time":   float64(time.Now().UnixNano()) / 1e9,
+			"status":     "ok",
+			"time":       float64(time.Now().UnixNano()) / 1e9,
+			"started_at": startedAt.Format(time.RFC3339Nano),
 		}, nil)
 		return
 	}
@@ -385,24 +393,32 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, parts []strin
 		total := len(items)
 
 		offset := 0
+		hasOffset := false
 		if offStr := u.Query().Get("offset"); offStr != "" {
 			if v, err := strconv.Atoi(offStr); err == nil && v >= 0 {
 				offset = v
+				hasOffset = true
 			}
 		}
 		limit := 0
-		if limStr := u.Query().Get("limit"); limStr != "" {
-			if v, err := strconv.Atoi(limStr); err == nil && v > 0 {
-				limit = v
+		for _, k := range []string{"limit", "per_page", "page_size", "size"} {
+			if limStr := u.Query().Get(k); limStr != "" {
+				if v, err := strconv.Atoi(limStr); err == nil && v > 0 {
+					limit = v
+					break
+				}
 			}
 		}
-		if pageStr := u.Query().Get("page"); pageStr != "" && offset == 0 {
-			if pNum, err := strconv.Atoi(pageStr); err == nil && pNum > 1 {
-				pageSize := limit
-				if pageSize <= 0 {
-					pageSize = 10
+		page := 1
+		if pageStr := u.Query().Get("page"); pageStr != "" {
+			if pNum, err := strconv.Atoi(pageStr); err == nil && pNum >= 1 {
+				page = pNum
+				if limit <= 0 {
+					limit = 1
 				}
-				offset = (pNum - 1) * pageSize
+				if !hasOffset {
+					offset = (page - 1) * limit
+				}
 			}
 		}
 		if offset > 0 {
@@ -416,12 +432,32 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, parts []strin
 			items = items[:limit]
 		}
 
+		effectiveLimit := limit
+		if effectiveLimit <= 0 {
+			effectiveLimit = total
+			if effectiveLimit == 0 {
+				effectiveLimit = 10
+			}
+		}
+		totalPages := 1
+		if total > 0 && effectiveLimit > 0 {
+			totalPages = (total + effectiveLimit - 1) / effectiveLimit
+		}
+		hasMore := offset+len(items) < total
+
 		headers := map[string]string{
 			"X-Total-Count": strconv.Itoa(total),
+			"X-Page":        strconv.Itoa(page),
+			"X-Per-Page":    strconv.Itoa(effectiveLimit),
 		}
 		s.sendJSON(w, http.StatusOK, map[string]any{
-			"items": items,
-			"total": total,
+			"items":       items,
+			"total":       total,
+			"page":        page,
+			"limit":       effectiveLimit,
+			"offset":      offset,
+			"total_pages": totalPages,
+			"has_more":    hasMore,
 		}, headers)
 		return
 	}

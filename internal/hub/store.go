@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hit-endpoint/hit-endpoint/internal/telemetry"
+	"gopkg.in/yaml.v3"
 )
 
 // NodeRecord tracks an individual machine, worker, or runner in the fleet.
@@ -121,6 +122,7 @@ type DispatchJob struct {
 	TargetRole     string     `json:"target_role,omitempty"`
 	AssignedNode   string     `json:"assigned_node,omitempty"`
 	SpecYAML       string     `json:"spec_yaml"`
+	rawSpecYAML    string     `json:"-"`
 	Concurrency    int        `json:"concurrency,omitempty"`
 	Requests       int        `json:"requests,omitempty"`
 	DurationS      float64    `json:"duration_s,omitempty"`
@@ -777,6 +779,65 @@ func hasCapability(nr *NodeRecord, cap string) bool {
 	return false
 }
 
+// maskSpecYAML redacts sensitive headers, auth tokens, and password fields in a job's YAML spec.
+func maskSpecYAML(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return raw
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(raw), &doc); err == nil && doc != nil {
+		if hdrs, ok := doc["headers"].(map[string]any); ok {
+			for k, v := range hdrs {
+				lk := strings.ToLower(strings.TrimSpace(k))
+				valStr := fmt.Sprintf("%v", v)
+				switch lk {
+				case "authorization", "proxy-authorization":
+					if parts := strings.SplitN(valStr, " ", 2); len(parts) == 2 {
+						hdrs[k] = parts[0] + " [MASKED]"
+					} else {
+						hdrs[k] = "[MASKED]"
+					}
+				case "cookie", "set-cookie", "x-api-key", "api-key", "apikey", "x-auth-token", "x-access-token":
+					hdrs[k] = "[MASKED]"
+				}
+			}
+		}
+		if authMap, ok := doc["auth"].(map[string]any); ok {
+			for k := range authMap {
+				lk := strings.ToLower(strings.TrimSpace(k))
+				if lk == "token" || lk == "password" || lk == "secret" || lk == "value" || lk == "api_key" || lk == "access_token" {
+					authMap[k] = "[MASKED]"
+				}
+			}
+		}
+		if bodyMap, ok := doc["body"].(map[string]any); ok {
+			if jsonMap, ok := bodyMap["json"].(map[string]any); ok {
+				maskSensitiveMap(jsonMap)
+			}
+			if formMap, ok := bodyMap["form"].(map[string]any); ok {
+				maskSensitiveMap(formMap)
+			}
+		}
+		if b, mErr := yaml.Marshal(doc); mErr == nil {
+			return string(b)
+		}
+	}
+	return raw
+}
+
+func maskSensitiveMap(m map[string]any) {
+	for k, v := range m {
+		lk := strings.ToLower(strings.TrimSpace(k))
+		if lk == "password" || lk == "secret" || lk == "token" || lk == "api_key" || lk == "access_token" || lk == "client_secret" {
+			m[k] = "[MASKED]"
+			continue
+		}
+		if sub, ok := v.(map[string]any); ok {
+			maskSensitiveMap(sub)
+		}
+	}
+}
+
 // CreateJob queues a new execution request and attempts to match with an available node.
 func (s *Store) CreateJob(req DispatchRequest) (*DispatchJob, error) {
 	s.mu.Lock()
@@ -801,7 +862,8 @@ func (s *Store) CreateJob(req DispatchRequest) (*DispatchJob, error) {
 		TargetNodeID: req.TargetNodeID,
 		TargetRegion: req.TargetRegion,
 		TargetRole:   req.TargetRole,
-		SpecYAML:     req.SpecYAML,
+		SpecYAML:     maskSpecYAML(req.SpecYAML),
+		rawSpecYAML:  req.SpecYAML,
 		Concurrency:  req.Concurrency,
 		Requests:     req.Requests,
 		DurationS:    req.DurationS,
@@ -954,7 +1016,12 @@ func (s *Store) ClaimNextJob(nodeID, region string, capabilities []string) (*Dis
 			nr.ActiveJobs++
 		}
 
-		return job.clone(), true
+		claimedCopy := job.clone()
+		if job.rawSpecYAML != "" {
+			claimedCopy.SpecYAML = job.rawSpecYAML
+			job.rawSpecYAML = ""
+		}
+		return claimedCopy, true
 	}
 
 	return nil, false
@@ -999,6 +1066,7 @@ func (s *Store) CompleteJob(jobID string, state string, result any, errMsg strin
 	job.Result = result
 	job.Error = errMsg
 	job.TelemetryRunID = telemetryRunID
+	job.rawSpecYAML = ""
 
 	level := "pass"
 	if state == "failed" {
@@ -1042,6 +1110,7 @@ func (s *Store) CancelJob(jobID string) error {
 	now := time.Now().UTC()
 	job.State = "canceled"
 	job.CompletedAt = &now
+	job.rawSpecYAML = ""
 	job.Logs = append(job.Logs, JobEvent{
 		Timestamp: now,
 		Level:     "info",
@@ -1068,6 +1137,7 @@ func (j *DispatchJob) clone() *DispatchJob {
 		return nil
 	}
 	cp := *j
+	cp.rawSpecYAML = ""
 	cp.Logs = make([]JobEvent, len(j.Logs))
 	copy(cp.Logs, j.Logs)
 	return &cp

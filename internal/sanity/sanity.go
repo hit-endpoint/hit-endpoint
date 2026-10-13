@@ -127,6 +127,7 @@ func RunSanity(z *zone.Zone, serverName string, scope string, ping bool, timeout
 			Zone:       z,
 			ServerName: chosen,
 			Persist:    false,
+			Strict:     true,
 		})
 		if err == nil {
 			server = session.Server
@@ -143,6 +144,7 @@ func RunSanity(z *zone.Zone, serverName string, scope string, ping bool, timeout
 			Zone:         z,
 			ZoneOptional: true,
 			Persist:      false,
+			Strict:       true,
 		})
 		rep.Server = "none"
 	}
@@ -222,20 +224,29 @@ func RunSanity(z *zone.Zone, serverName string, scope string, ping bool, timeout
 		}
 	}
 
+	var otherSessions []*runner.Session
 	// 3b. Validate additional servers when no explicit -s server was specified
 	if serverName == "" && len(serverNames) > 1 {
 		for _, srvName := range serverNames {
 			if srvName == chosen {
 				continue
 			}
-			otherSrv, err := z.LoadServer(srvName)
+			otherSess, err := runner.NewSession(runner.SessionOptions{
+				Zone:       z,
+				ServerName: srvName,
+				Persist:    false,
+				Strict:     true,
+			})
 			if err != nil {
 				rep.Add("fail", fmt.Sprintf("server '%s' does not load", srvName), err.Error(), "fix the YAML in that file")
 				continue
 			}
+			otherSrv := otherSess.Server
 			if otherSrv == nil {
+				otherSess.Close()
 				continue
 			}
+			otherSessions = append(otherSessions, otherSess)
 			if bu, ok := otherSrv.Vars["base_url"]; !ok || fmt.Sprintf("%v", bu) == "" {
 				rep.Add("warn", fmt.Sprintf("server '%s' has no base_url", srvName),
 					"requests with relative urls will fail when using -s "+srvName,
@@ -270,6 +281,11 @@ func RunSanity(z *zone.Zone, serverName string, scope string, ping bool, timeout
 			}
 		}
 	}
+	defer func() {
+		for _, s := range otherSessions {
+			s.Close()
+		}
+	}()
 
 	// 4. Collections
 	scopeDir := z.CollectionsDir()
@@ -346,12 +362,53 @@ func RunSanity(z *zone.Zone, serverName string, scope string, ping bool, timeout
 		}
 	}
 
+	// Validate placeholders inside server files themselves (both primary and additional servers)
+	validateServerPlaceholders := func(sess *runner.Session, isPrimary bool) {
+		if sess == nil || sess.Server == nil {
+			return
+		}
+		srv := sess.Server
+		known := sess.Variables()
+		for _, n := range templating.FindPlaceholders(srv.Vars) {
+			if strings.HasPrefix(n, "$") {
+				continue
+			}
+			if _, ok := known[n]; !ok {
+				if _, isCap := captured[n]; !isCap {
+					rep.Add("fail", fmt.Sprintf("server '%s' references undefined variable {{%s}}", srv.Name, n),
+						fmt.Sprintf("servers/%s.yaml uses {{%s}} but nothing defines or captures it", srv.Name, n),
+						fmt.Sprintf("define %s in servers/%s.yaml, %s.secrets.yaml, or zone.yaml", n, srv.Name, srv.Name))
+				}
+			}
+		}
+		if !isPrimary && srv.Auth != nil {
+			if am, ok := srv.Auth.(map[string]any); ok {
+				for _, n := range templating.FindPlaceholders(am) {
+					if strings.HasPrefix(n, "$") {
+						continue
+					}
+					if _, ok := known[n]; !ok {
+						if _, isCap := captured[n]; !isCap {
+							rep.Add("fail", fmt.Sprintf("server '%s' auth needs {{%s}} but nothing defines or captures it", srv.Name, n),
+								"", fmt.Sprintf("add %s to %s.secrets.yaml, or add a login request with captures: {%s: json.<field>}", n, srv.Name, n))
+						}
+					}
+				}
+			}
+		}
+	}
+	validateServerPlaceholders(session, true)
+	for _, otherSess := range otherSessions {
+		validateServerPlaceholders(otherSess, false)
+	}
+
 	var parseErrors []string
 	var drafts []string
 	var unconvertedLeftovers []string
 	noTests := 0
 	undefinedCounts := make(map[string]int)
 	needsCaptureCounts := make(map[string]int)
+	otherUndefinedCounts := make(map[string]map[string]int)
 	var defaultsErrors []string
 
 	for _, p := range requests {
@@ -392,6 +449,25 @@ func RunSanity(z *zone.Zone, serverName string, scope string, ping bool, timeout
 				parseErrors = append(parseErrors, fmt.Sprintf("%s: %v", ref, err))
 			}
 		}
+
+		for _, otherSess := range otherSessions {
+			_, _, _, otherErr := otherSess.Prepare(sp, nil)
+			if otherErr != nil {
+				if mErr, ok := otherErr.(*templating.MissingVariableError); ok {
+					for _, name := range mErr.Names {
+						if strings.HasPrefix(strings.ToLower(name), "$env:") {
+							continue
+						}
+						if _, isCap := captured[name]; !isCap {
+							if otherUndefinedCounts[otherSess.Server.Name] == nil {
+								otherUndefinedCounts[otherSess.Server.Name] = make(map[string]int)
+							}
+							otherUndefinedCounts[otherSess.Server.Name][name]++
+						}
+					}
+				}
+			}
+		}
 	}
 
 	folderSet := make(map[string]bool)
@@ -429,8 +505,42 @@ func RunSanity(z *zone.Zone, serverName string, scope string, ping bool, timeout
 		rep.Add("fail", fmt.Sprintf("undefined variables used by requests: %s", strings.Join(undefList, ", ")),
 			"counts are the number of requests affected; nothing defines these in the zone, server, defaults or captures",
 			"add them to the environment file (or its secrets file) with the values for this server")
+	} else if len(otherUndefinedCounts) > 0 {
+		for _, otherSess := range otherSessions {
+			srvName := otherSess.Server.Name
+			counts := otherUndefinedCounts[srvName]
+			if len(counts) == 0 {
+				continue
+			}
+			var undefList []string
+			for k, count := range counts {
+				undefList = append(undefList, fmt.Sprintf("{{%s}} (%d)", k, count))
+			}
+			sort.Strings(undefList)
+			rep.Add("fail", fmt.Sprintf("server '%s' has undefined variables used by requests: %s", srvName, strings.Join(undefList, ", ")),
+				fmt.Sprintf("defined in '%s' but missing in servers/%s.yaml", rep.Server, srvName),
+				fmt.Sprintf("add them to servers/%s.yaml (or servers/%s.secrets.yaml)", srvName, srvName))
+		}
 	} else if len(requests) > 0 {
 		rep.Add("ok", "every variable is defined or captured", "", "")
+	}
+
+	if len(undefinedCounts) > 0 && len(otherUndefinedCounts) > 0 {
+		for _, otherSess := range otherSessions {
+			srvName := otherSess.Server.Name
+			counts := otherUndefinedCounts[srvName]
+			if len(counts) == 0 {
+				continue
+			}
+			var undefList []string
+			for k, count := range counts {
+				undefList = append(undefList, fmt.Sprintf("{{%s}} (%d)", k, count))
+			}
+			sort.Strings(undefList)
+			rep.Add("fail", fmt.Sprintf("server '%s' has undefined variables used by requests: %s", srvName, strings.Join(undefList, ", ")),
+				fmt.Sprintf("missing in servers/%s.yaml", srvName),
+				fmt.Sprintf("add them to servers/%s.yaml (or servers/%s.secrets.yaml)", srvName, srvName))
+		}
 	}
 
 	if len(needsCaptureCounts) > 0 {

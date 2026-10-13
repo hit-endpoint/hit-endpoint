@@ -193,12 +193,15 @@ func Run(method, rawURL string, headers map[string]string, query map[string]stri
 					Issue:        fmt.Sprintf("Authentication bypass: endpoint accepted corrupted Bearer token with HTTP %d", resp.StatusCode),
 					Severity:     "HIGH",
 				})
-			} else if m.Category == "injection" && (isWriteEndpoint || strings.Contains(fullBody, "<script>alert(1)</script>") || strings.Contains(fullBody, "onload=alert(1)") || strings.Contains(fullBody, "root:x:")) {
+			} else if m.Category == "injection" {
 				sev := "MEDIUM"
 				issue := fmt.Sprintf("Endpoint accepted injection payload without validation rejection (HTTP %d)", resp.StatusCode)
 				if strings.Contains(fullBody, "<script>alert(1)</script>") || strings.Contains(fullBody, "onload=alert(1)") {
 					sev = "HIGH"
 					issue = fmt.Sprintf("Reflected XSS / unescaped script payload in HTTP %d response", resp.StatusCode)
+				} else if strings.Contains(fullBody, "root:x:") {
+					sev = "HIGH"
+					issue = fmt.Sprintf("Path traversal file disclosure in HTTP %d response", resp.StatusCode)
 				}
 				result.Anomalies = append(result.Anomalies, Anomaly{
 					MutationName: m.Name,
@@ -209,7 +212,7 @@ func Run(method, rawURL string, headers map[string]string, query map[string]stri
 					Issue:        issue,
 					Severity:     sev,
 				})
-			} else if isWriteEndpoint && (m.Category == "types" || strings.Contains(m.Name, "10,000 'A's") || strings.Contains(m.Name, "Embedded null byte") || strings.Contains(m.Name, "Empty JSON object") || strings.Contains(m.Name, "Unexpected properties")) {
+			} else if m.Category == "types" || strings.Contains(m.Name, "10,000 'A's") || strings.Contains(m.Name, "Embedded null byte") || strings.Contains(m.Name, "Unicode control characters") || (isWriteEndpoint && (strings.Contains(m.Name, "Empty JSON object") || strings.Contains(m.Name, "Unexpected properties"))) {
 				result.Anomalies = append(result.Anomalies, Anomaly{
 					MutationName: m.Name,
 					Category:     m.Category,

@@ -98,3 +98,40 @@ func TestRunFuzzExecution(t *testing.T) {
 		t.Errorf("expected 500 anomaly in report, got: %+v", res.Anomalies)
 	}
 }
+
+func TestGeneratePathParameterMutations(t *testing.T) {
+	mutations := GenerateMutations("GET", "http://127.0.0.1:8765/pets/1", map[string]string{"Authorization": "Bearer demo"}, nil, nil, nil)
+
+	hasZeroPath := false
+	hasTypePath := false
+	hasStringPath := false
+	hasInjectionPath := false
+	for _, m := range mutations {
+		if m.Category == "boundaries" && strings.HasSuffix(m.URL, "/pets/0") {
+			hasZeroPath = true
+		}
+		if m.Category == "types" && strings.HasSuffix(m.URL, "/pets/not-a-number") {
+			hasTypePath = true
+		}
+		if m.Category == "strings" && strings.Contains(m.Name, "Path string on /pets/{id}") {
+			hasStringPath = true
+		}
+		if m.Category == "injection" && strings.Contains(m.Name, "Path injection in /pets/{id}") {
+			hasInjectionPath = true
+		}
+	}
+
+	if !hasZeroPath {
+		t.Errorf("expected boundary mutation on URL path parameter (/pets/0)")
+	}
+	if !hasTypePath {
+		t.Errorf("expected type confusion mutation on URL path parameter (/pets/not-a-number)")
+	}
+	if !hasStringPath {
+		t.Errorf("expected string mutation on URL path parameter")
+	}
+	if !hasInjectionPath {
+		t.Errorf("expected injection mutation on URL path parameter")
+	}
+}
+

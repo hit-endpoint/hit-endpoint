@@ -157,3 +157,42 @@ func TestCompareAndFormatTerminal(t *testing.T) {
 		t.Errorf("formatted diff missing body diff: %s", formatted)
 	}
 }
+
+func TestCompareHeadersVolatileAndIgnoreList(t *testing.T) {
+	oldH := map[string]string{
+		"Content-Type":          "application/json",
+		"Date":                  "Mon, 12 Oct 2026 10:00:00 GMT",
+		"CF-Ray":                "8a1b2c3d4e-SJC",
+		"X-RateLimit-Remaining": "59",
+		"X-Rate-Limit-Reset":    "1700000001",
+		"Retry-After":           "10",
+		"X-Custom-Trace":        "trace-1",
+	}
+	newH := map[string]string{
+		"Content-Type":          "application/json",
+		"Date":                  "Mon, 12 Oct 2026 10:00:05 GMT",
+		"CF-Ray":                "9f8e7d6c5b-SJC",
+		"X-RateLimit-Remaining": "58",
+		"X-Rate-Limit-Reset":    "1700000009",
+		"Retry-After":           "5",
+		"X-Custom-Trace":        "trace-2",
+	}
+
+	// Default CompareHeaders ignores volatile headers (Date, CF-Ray, X-RateLimit-*, X-Rate-Limit-*, Retry-After)
+	diffs := CompareHeaders(oldH, newH)
+	if len(diffs) != 1 || diffs[0].Name != "X-Custom-Trace" {
+		t.Fatalf("expected only X-Custom-Trace difference after ignoring volatile headers, got: %+v", diffs)
+	}
+
+	// Custom IgnoreHeaders ignores X-Custom-Trace as well
+	res := Compare(
+		"Hit #1", "Hit #2",
+		200, "OK", 10, 15, oldH, `{"ok":true}`,
+		200, "OK", 12, 15, newH, `{"ok":true}`,
+		Options{CompareHeaders: true, IgnoreHeaders: []string{"x-custom-*"}},
+	)
+	if res.HasDifferences || len(res.HeaderDiffs) != 0 {
+		t.Errorf("expected no differences when ignoring x-custom-*, got HeaderDiffs=%+v", res.HeaderDiffs)
+	}
+}
+

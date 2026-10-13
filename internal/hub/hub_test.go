@@ -730,3 +730,68 @@ func TestHubServer_DispatchHTTPRoutes(t *testing.T) {
 	}
 }
 
+func TestDispatchJobSpecMaskingAtRest(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "hit_hub_mask_test_*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Start hub without an API key (default open mode)
+	server, err := NewServer(Config{
+		Addr:    "127.0.0.1:0",
+		DataDir: tempDir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := server.httpServer.Handler
+
+	rawSpec := "method: GET\nurl: http://127.0.0.1:8765/pets\nheaders:\n  Authorization: Bearer super-secret-live-token\n"
+	dispatchReq, _ := json.Marshal(map[string]any{
+		"kind":      "request",
+		"target":    "petstore/list",
+		"spec_yaml": rawSpec,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/dispatch", bytes.NewReader(dispatchReq))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "super-secret-live-token") {
+		t.Errorf("POST /api/v1/dispatch leaked plaintext token: %s", rr.Body.String())
+	}
+
+	// Verify GET /api/v1/dispatch listing masks Authorization header
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/dispatch", nil)
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK from dispatch list, got %d", rr.Code)
+	}
+	if strings.Contains(rr.Body.String(), "super-secret-live-token") {
+		t.Errorf("GET /api/v1/dispatch listing leaked plaintext token: %s", rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "[MASKED]") {
+		t.Errorf("expected [MASKED] in GET /api/v1/dispatch listing, got: %s", rr.Body.String())
+	}
+
+	// Verify worker claiming the job still gets the unmasked spec once for execution
+	claimed, ok := server.store.ClaimNextJob("worker-1", "Worker 1", nil)
+	if !ok || claimed == nil {
+		t.Fatalf("expected worker to claim job")
+	}
+	if !strings.Contains(claimed.SpecYAML, "super-secret-live-token") {
+		t.Errorf("expected worker claim to receive raw spec YAML, got: %s", claimed.SpecYAML)
+	}
+
+	// Verify listing after claim still masks the spec
+	jobs := server.store.ListJobs(10)
+	if len(jobs) != 1 || strings.Contains(jobs[0].SpecYAML, "super-secret-live-token") {
+		t.Errorf("expected stored job spec to remain masked after claim, got: %+v", jobs)
+	}
+}
+
+

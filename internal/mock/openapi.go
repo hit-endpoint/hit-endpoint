@@ -684,8 +684,64 @@ func (e *OpenAPIMockEngine) handleStatefulCRUD(w http.ResponseWriter, r *http.Re
 	// 2. GET /collection -> List items
 	if route.Method == "GET" && !isItemEndpoint {
 		e.mu.RLock()
-		currentItems := append([]map[string]any(nil), e.stateStore[collectionPrefix]...)
+		rawItems := append([]map[string]any(nil), e.stateStore[collectionPrefix]...)
 		e.mu.RUnlock()
+
+		q := r.URL.Query()
+		kindFilter := q.Get("kind")
+		var currentItems []map[string]any
+		for _, item := range rawItems {
+			if kindFilter != "" {
+				if kVal, ok := item["kind"]; !ok || fmt.Sprintf("%v", kVal) != kindFilter {
+					continue
+				}
+			}
+			currentItems = append(currentItems, item)
+		}
+		if currentItems == nil {
+			currentItems = []map[string]any{}
+		}
+		totalCount := len(currentItems)
+
+		offset := 0
+		hasOffset := false
+		if offStr := q.Get("offset"); offStr != "" {
+			if v, err := strconv.Atoi(offStr); err == nil && v >= 0 {
+				offset = v
+				hasOffset = true
+			}
+		}
+		limit := 0
+		for _, k := range []string{"limit", "per_page", "page_size", "size"} {
+			if limStr := q.Get(k); limStr != "" {
+				if v, err := strconv.Atoi(limStr); err == nil && v > 0 {
+					limit = v
+					break
+				}
+			}
+		}
+		page := 1
+		if pageStr := q.Get("page"); pageStr != "" {
+			if pNum, err := strconv.Atoi(pageStr); err == nil && pNum >= 1 {
+				page = pNum
+				if limit <= 0 {
+					limit = 2
+				}
+				if !hasOffset {
+					offset = (page - 1) * limit
+				}
+			}
+		}
+		if offset > 0 {
+			if offset >= len(currentItems) {
+				currentItems = []map[string]any{}
+			} else {
+				currentItems = currentItems[offset:]
+			}
+		}
+		if limit > 0 && limit < len(currentItems) {
+			currentItems = currentItems[:limit]
+		}
 
 		resp := e.pickSuccessResponse(route)
 		schema := e.extractResponseSchema(resp)
@@ -695,7 +751,8 @@ func (e *OpenAPIMockEngine) handleStatefulCRUD(w http.ResponseWriter, r *http.Re
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("X-Total-Count", strconv.Itoa(len(currentItems)))
+		w.Header().Set("X-Total-Count", strconv.Itoa(totalCount))
+		w.Header().Set("X-Page", strconv.Itoa(page))
 		w.WriteHeader(status)
 
 		// Check if response schema expects wrapper object or direct array
@@ -706,10 +763,12 @@ func (e *OpenAPIMockEngine) handleStatefulCRUD(w http.ResponseWriter, r *http.Re
 					if propSchema, ok := propSchemaAny.(map[string]any); ok && propSchema["type"] == "array" {
 						wrapper[propName] = currentItems
 					} else if propName == "total" || propName == "count" {
-						wrapper[propName] = len(currentItems)
+						wrapper[propName] = totalCount
 					}
 				}
 				if len(wrapper) > 0 {
+					wrapper["page"] = page
+					wrapper["offset"] = offset
 					_ = json.NewEncoder(w).Encode(wrapper)
 					return true
 				}

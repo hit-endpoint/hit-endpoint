@@ -120,3 +120,25 @@ shorthands:
 		t.Errorf("unexpected api-login: %+v", al)
 	}
 }
+
+func TestShorthandRejectsCollectionFolderCollision(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "hit_shorthand_collision_*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	if err := os.MkdirAll(filepath.Join(tmpDir, "collections", "pets"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	sh := &Shorthand{
+		Name:   "pets",
+		URL:    "http://localhost:8080/pets",
+		Method: "GET",
+	}
+	if err := Save(tmpDir, sh); err == nil {
+		t.Fatalf("expected error when saving shorthand matching collection folder 'pets', got nil")
+	}
+}
+

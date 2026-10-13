@@ -195,6 +195,18 @@ func Save(zoneRoot string, sh *Shorthand) error {
 			return err
 		}
 		filePath = filepath.Join(dir, ShorthandsFile)
+	} else {
+		collDir := filepath.Join(zoneRoot, "collections", sh.Name)
+		if fi, err := os.Stat(collDir); err == nil && fi.IsDir() {
+			return fmt.Errorf("shorthand name %q collides with existing collection folder collections/%s", sh.Name, sh.Name)
+		}
+		if entries, err := os.ReadDir(filepath.Join(zoneRoot, "collections")); err == nil {
+			for _, e := range entries {
+				if e.IsDir() && strings.EqualFold(e.Name(), sh.Name) {
+					return fmt.Errorf("shorthand name %q collides with existing collection folder collections/%s", sh.Name, e.Name())
+				}
+			}
+		}
 	}
 
 	existing := make(map[string]any)

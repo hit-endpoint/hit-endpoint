@@ -2396,12 +2396,25 @@ func cmdPerf(args []string, globals *GlobalFlags, p *output.Printer, z *zone.Zon
 		if report.Failed > 0 && report.OK == 0 {
 			status = 500
 		}
+		perfURL := report.Name
+		if !strings.Contains(perfURL, "://") && sess != nil {
+			if sp, lErr := sess.Load(ref); lErr == nil && sp != nil {
+				if _, prep, _, pErr := sess.Prepare(sp, nil); pErr == nil && prep != nil {
+					perfURL = prep.FullURL()
+				}
+			}
+			if !strings.Contains(perfURL, "://") && sess.Server != nil {
+				if bu, ok := sess.Server.Vars["base_url"].(string); ok && bu != "" {
+					perfURL = strings.TrimRight(bu, "/") + "/" + strings.TrimLeft(perfURL, "/")
+				}
+			}
+		}
 		store := history.NewStore(history.GetHistoryPath(zoneRoot))
 		_ = store.Append(history.NewEntryFromResult(&types.Result{
 			Name:      ref,
 			Ref:       ref,
 			Method:    "GET",
-			Url:       report.Name,
+			Url:       perfURL,
 			Status:    status,
 			HasStatus: true,
 			Reason:    fmt.Sprintf("perf (%d completed)", report.Completed),
@@ -4342,6 +4355,8 @@ func cmdReplay(args []string, globals *GlobalFlags, p *output.Printer) error {
 		idOrIdx         string
 		diffMode        bool
 		compareHeaders  bool
+		allHeaders      bool
+		ignoreHeaders   []string
 		bodyOnly        bool
 		jsonOut         bool
 		dryRun          bool
@@ -4357,6 +4372,16 @@ func cmdReplay(args []string, globals *GlobalFlags, p *output.Printer) error {
 			diffMode = true
 		case arg == "--headers":
 			compareHeaders = true
+		case arg == "--all-headers":
+			compareHeaders = true
+			allHeaders = true
+		case (arg == "--ignore-header" || arg == "--ignore-headers") && i+1 < len(args):
+			ignoreHeaders = append(ignoreHeaders, args[i+1])
+			i++
+		case strings.HasPrefix(arg, "--ignore-headers="):
+			ignoreHeaders = append(ignoreHeaders, strings.TrimPrefix(arg, "--ignore-headers="))
+		case strings.HasPrefix(arg, "--ignore-header="):
+			ignoreHeaders = append(ignoreHeaders, strings.TrimPrefix(arg, "--ignore-header="))
 		case arg == "--body-only":
 			bodyOnly = true
 		case arg == "--json":
@@ -4386,7 +4411,7 @@ func cmdReplay(args []string, globals *GlobalFlags, p *output.Printer) error {
 	}
 
 	if idOrIdx == "" {
-		return zone.NewZoneError("usage: hit replay <ID|INDEX> [-s SERVER] [--var k=v] [-H k:v] [--diff] [--headers] [--body-only] [--dry-run] [--yes] [--json]")
+		return zone.NewZoneError("usage: hit replay <ID|INDEX> [-s SERVER] [--var k=v] [-H k:v] [--diff] [--headers] [--ignore-headers k1,k2] [--body-only] [--dry-run] [--yes] [--json]")
 	}
 	z, _ := zone.FindOrNone(globals.Zone)
 	zoneRoot := ""
@@ -4533,9 +4558,11 @@ func cmdReplay(args []string, globals *GlobalFlags, p *output.Printer) error {
 	labelNew := fmt.Sprintf("Live Replay (%s)", time.Now().Format("15:04:05"))
 
 	diffOpts := diff.Options{
-		CompareHeaders: compareHeaders,
-		BodyOnly:       bodyOnly,
-		ContextLines:   contextLines,
+		CompareHeaders:         compareHeaders,
+		BodyOnly:               bodyOnly,
+		ContextLines:           contextLines,
+		IgnoreHeaders:          ignoreHeaders,
+		IncludeVolatileHeaders: allHeaders,
 	}
 
 	diffRes := diff.Compare(
@@ -4565,6 +4592,8 @@ func cmdDiff(args []string, globals *GlobalFlags, p *output.Printer) error {
 	var (
 		posArgs        []string
 		compareHeaders bool
+		allHeaders     bool
+		ignoreHeaders  []string
 		bodyOnly       bool
 		jsonOut        bool
 		contextLines   = 3
@@ -4575,6 +4604,16 @@ func cmdDiff(args []string, globals *GlobalFlags, p *output.Printer) error {
 		switch {
 		case arg == "--headers":
 			compareHeaders = true
+		case arg == "--all-headers":
+			compareHeaders = true
+			allHeaders = true
+		case (arg == "--ignore-header" || arg == "--ignore-headers") && i+1 < len(args):
+			ignoreHeaders = append(ignoreHeaders, args[i+1])
+			i++
+		case strings.HasPrefix(arg, "--ignore-headers="):
+			ignoreHeaders = append(ignoreHeaders, strings.TrimPrefix(arg, "--ignore-headers="))
+		case strings.HasPrefix(arg, "--ignore-header="):
+			ignoreHeaders = append(ignoreHeaders, strings.TrimPrefix(arg, "--ignore-header="))
 		case arg == "--body-only":
 			bodyOnly = true
 		case arg == "--json":
@@ -4592,7 +4631,7 @@ func cmdDiff(args []string, globals *GlobalFlags, p *output.Printer) error {
 	}
 
 	if len(posArgs) == 0 {
-		return zone.NewZoneError("usage: hit diff <ID|INDEX> [<ID|INDEX>] [--headers] [--body-only] [--json] [--context N]")
+		return zone.NewZoneError("usage: hit diff <ID|INDEX> [<ID|INDEX>] [--headers] [--ignore-headers k1,k2] [--body-only] [--json] [--context N]")
 	}
 
 	var id1, id2 string
@@ -4626,9 +4665,11 @@ func cmdDiff(args []string, globals *GlobalFlags, p *output.Printer) error {
 	label2 := fmt.Sprintf("Hit #%s [%s %s]", id2, entry2.Method, entry2.Url)
 
 	diffOpts := diff.Options{
-		CompareHeaders: compareHeaders,
-		BodyOnly:       bodyOnly,
-		ContextLines:   contextLines,
+		CompareHeaders:         compareHeaders,
+		BodyOnly:               bodyOnly,
+		ContextLines:           contextLines,
+		IgnoreHeaders:          ignoreHeaders,
+		IncludeVolatileHeaders: allHeaders,
 	}
 
 	res := diff.Compare(
@@ -5704,7 +5745,11 @@ func printFuzzSummary(res *fuzz.FuzzResult, p *output.Printer) {
 	p.Out(p.Dim("----------------------------------------------------------------------"))
 	p.Out(fmt.Sprintf("Total Mutations Executed: %d  (in %.1fms)", res.TotalMutations, res.ElapsedMs))
 	p.Out(fmt.Sprintf("  %s Handled (4xx client rejections): %d", p.Green("✓"), res.Handled4xx))
-	p.Out(fmt.Sprintf("  %s Accepted (2xx success):          %d", p.Green("✓"), res.Success2xx))
+	if len(res.Anomalies) > 0 && res.Success2xx > 0 {
+		p.Out(fmt.Sprintf("  %s Accepted (2xx success):          %d (%d flagged as anomalies)", p.Yellow("⚠"), res.Success2xx, len(res.Anomalies)))
+	} else {
+		p.Out(fmt.Sprintf("  %s Accepted (2xx success):          %d", p.Green("✓"), res.Success2xx))
+	}
 
 	if res.TransportErrors > 0 {
 		p.Out(fmt.Sprintf("  %s Transport Errors (hangs/drops):  %d", p.Red("✗"), res.TransportErrors))
@@ -5719,6 +5764,7 @@ func printFuzzSummary(res *fuzz.FuzzResult, p *output.Printer) {
 	}
 
 	if len(res.Anomalies) > 0 {
+		p.Out(fmt.Sprintf("  %s Anomalies Detected:              %d", p.Yellow("⚠"), len(res.Anomalies)))
 		p.Out("")
 		p.Out(p.Bold("⚠️ Detected Vulnerabilities & Anomalies:"))
 		for i, a := range res.Anomalies {
@@ -7390,10 +7436,17 @@ func cmdShorthand(args []string, globals *GlobalFlags, p *output.Printer) error 
 		if isKnownSubcommand(name) || isHTTPMethod(name) {
 			return zone.NewZoneError("shorthand name %q collides with a built-in command or HTTP method", name)
 		}
-		if !isGlobal && zoneRoot != "" {
+		if zoneRoot != "" {
 			collDir := filepath.Join(zoneRoot, "collections", name)
 			if fi, err := os.Stat(collDir); err == nil && fi.IsDir() {
-				fmt.Fprintf(os.Stderr, "%s\n", p.Yellow(fmt.Sprintf("warning: shorthand %q shadows existing collection folder collections/%s", name, name)))
+				return zone.NewZoneError("shorthand name %q collides with existing collection folder collections/%s", name, name)
+			}
+			if entries, err := os.ReadDir(filepath.Join(zoneRoot, "collections")); err == nil {
+				for _, e := range entries {
+					if e.IsDir() && strings.EqualFold(e.Name(), name) {
+						return zone.NewZoneError("shorthand name %q collides with existing collection folder collections/%s", name, e.Name())
+					}
+				}
 			}
 		}
 

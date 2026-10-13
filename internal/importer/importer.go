@@ -219,13 +219,24 @@ type ScriptConverter struct {
 	Lines       []string
 	Tests       []map[string]any
 	Captures    map[string]any
+	Vars        map[string]any
 	Unconverted []string
+	jsonVars    map[string]bool
 }
 
 func NewScriptConverter(lines []string) *ScriptConverter {
 	return &ScriptConverter{
 		Lines:    lines,
 		Captures: make(map[string]any),
+		Vars:     make(map[string]any),
+		jsonVars: map[string]bool{
+			"jsonData":     true,
+			"body":         true,
+			"data":         true,
+			"res":          true,
+			"resp":         true,
+			"responseJson": true,
+		},
 	}
 }
 
@@ -234,42 +245,71 @@ func (c *ScriptConverter) Convert() {
 
 	flushTest := func() {
 		if curTest != nil {
-			c.Tests = append(c.Tests, *curTest)
+			// Only append if the test has at least one assertion (not just a "name" key)
+			if len(*curTest) > 1 || (*curTest)["name"] == nil {
+				c.Tests = append(c.Tests, *curTest)
+			}
 			curTest = nil
 		}
 	}
 
-	pmTestRe := regexp.MustCompile(`pm\.test\(\s*["'](.*?)["']`)
-	statusRe := regexp.MustCompile(`pm\.response\.to\.(?:have\.)?status\((\d+)\)`)
-	jsonTestRe := regexp.MustCompile(`pm\.response\.to\.(?:be\.)?json`)
-	timeBelowRe := regexp.MustCompile(`pm\.response\.responseTime\)\.to\.be\.below\((\d+)\)`)
-	expectTypeRe := regexp.MustCompile(`pm\.expect\((.*?)\)\.to\.be\.a\(["'](.*?)["']\)`)
-	expectAboveRe := regexp.MustCompile(`pm\.expect\((.*?)\)\.to\.be\.above\((\d+)\)`)
-	expectEqlRe := regexp.MustCompile(`pm\.expect\((.*?)\)\.to\.eql\(["']?(.*?)["']?\)`)
-	expectLenRe := regexp.MustCompile(`pm\.expect\((.*?)\)\.to\.have\.lengthOf\((\d+)\)`)
-	envSetRe := regexp.MustCompile(`pm\.(?:environment|collectionVariables)\.set\(["'](.*?)["'],\s*(.*?)\)`)
+	jsonAssignRe := regexp.MustCompile(`^(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:pm\.response\.json\(\)|JSON\.parse\(responseBody\))\s*;?$`)
+	pmTestHeaderRe := regexp.MustCompile(`^pm\.test\(\s*["'](.*?)["']\s*,\s*(?:function\s*\([^)]*\)\s*\{|\([^)]*\)\s*=>\s*\{?)\s*(.*)$`)
+	statusRe := regexp.MustCompile(`pm\.response\.to\.(?:have\.)?status\(\s*(\d+)\s*\)`)
+	codeBelowRe := regexp.MustCompile(`pm\.expect\(\s*pm\.response\.code\s*\)\.to\.be\.below\(\s*(\d+)\s*\)`)
+	codeEqlRe := regexp.MustCompile(`pm\.expect\(\s*pm\.response\.code\s*\)\.to\.(?:eql|equal)\(\s*(\d+)\s*\)`)
+	codeOneOfRe := regexp.MustCompile(`pm\.expect\(\s*pm\.response\.code\s*\)\.to\.be\.oneOf\(\s*\[([\d,\s]+)\]\s*\)`)
+	respOkRe := regexp.MustCompile(`pm\.response\.to\.be\.(?:ok|success)\b`)
+	jsonTestRe := regexp.MustCompile(`pm\.response\.to\.(?:be\.)?json\b`)
+	headerRe := regexp.MustCompile(`pm\.response\.to\.have\.header\(\s*["']([^"']+)["'](?:\s*,\s*["']([^"']*)["'])?\s*\)`)
+	timeBelowRe := regexp.MustCompile(`pm\.response\.responseTime\s*\)\.to\.be\.below\(\s*(\d+)\s*\)`)
+	expectTypeRe := regexp.MustCompile(`pm\.expect\((.*?)\)\.to\.be\.an?\(\s*["'](.*?)["']\s*\)`)
+	expectAboveRe := regexp.MustCompile(`pm\.expect\((.*?)\)\.to\.be\.(?:above|greaterThan)\(\s*(-?\d+)\s*\)`)
+	expectAtLeastRe := regexp.MustCompile(`pm\.expect\((.*?)\)\.to\.be\.(?:at\.least|gte)\(\s*(-?\d+)\s*\)`)
+	expectBelowRe := regexp.MustCompile(`pm\.expect\((.*?)\)\.to\.be\.(?:below|lessThan)\(\s*(-?\d+)\s*\)`)
+	expectPropRe := regexp.MustCompile(`pm\.expect\((.*?)\)\.to\.have\.property\(\s*["']([^"']+)["'](?:\s*,\s*(.+?))?\s*\)`)
+	expectEqlRe := regexp.MustCompile(`pm\.expect\((.*?)\)\.to\.(?:deep\.)?(?:eql|equal)\(\s*(.+?)\s*\)`)
+	expectIncludeRe := regexp.MustCompile(`pm\.expect\((.*?)\)\.to\.(?:include|contain)\(\s*["'](.*?)["']\s*\)`)
+	expectLenRe := regexp.MustCompile(`pm\.expect\((.*?)\)\.to\.have\.lengthOf\(\s*(\d+)\s*\)`)
+	expectBoolRe := regexp.MustCompile(`pm\.expect\((.*?)\)\.to\.be\.(true|false)\b`)
+	expectExistRe := regexp.MustCompile(`pm\.expect\((.*?)\)\.to\.(?:exist|not\.be\.null|not\.be\.undefined)\b`)
+	envSetRe := regexp.MustCompile(`pm\.(?:environment|collectionVariables|globals|variables)\.set\(\s*["'](.*?)["']\s*,\s*(.*?)\s*\)\s*;?$`)
+	setNextReqRe := regexp.MustCompile(`^\w+(?:\.\w+)*\.setNextRequest\(\s*.*?\s*\)\s*;?$`)
+	legacyStatusRe := regexp.MustCompile(`^tests\[\s*["'](.*?)["']\s*\]\s*=\s*responseCode\.code\s*===?\s*(\d+)\s*;?$`)
 
-	for _, line := range c.Lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || trimmed == "});" || trimmed == "}" || trimmed == "{" ||
-			trimmed == "var jsonData = pm.response.json();" ||
-			trimmed == "const jsonData = pm.response.json();" ||
-			trimmed == "let jsonData = pm.response.json();" ||
+	var expandedLines []string
+	for _, rawLine := range c.Lines {
+		for _, sub := range strings.Split(rawLine, "\n") {
+			expandedLines = append(expandedLines, sub)
+		}
+	}
+
+	processStmt := func(stmt string, origLine string) {
+		trimmed := strings.TrimSpace(stmt)
+		trimmed = strings.TrimSuffix(trimmed, "});")
+		trimmed = strings.TrimSuffix(trimmed, "})")
+		trimmed = strings.TrimSpace(trimmed)
+		if trimmed == "" || trimmed == "});" || trimmed == "}" || trimmed == "{" || trimmed == ";" ||
 			strings.HasPrefix(trimmed, "//") ||
 			strings.HasPrefix(trimmed, "/*") ||
 			strings.HasPrefix(trimmed, "*") ||
 			strings.HasPrefix(trimmed, "console.log(") ||
 			strings.HasPrefix(trimmed, "console.info(") ||
 			strings.HasPrefix(trimmed, "console.warn(") ||
-			strings.HasPrefix(trimmed, "console.error(") {
-			continue
+			strings.HasPrefix(trimmed, "console.error(") ||
+			setNextReqRe.MatchString(trimmed) {
+			return
 		}
 
-		if m := pmTestRe.FindStringSubmatch(trimmed); len(m) > 1 {
-			flushTest()
-			t := map[string]any{"name": m[1]}
-			curTest = &t
-			continue
+		if m := legacyStatusRe.FindStringSubmatch(trimmed); len(m) > 2 {
+			code, _ := strconv.Atoi(m[2])
+			c.Tests = append(c.Tests, map[string]any{"name": m[1], "status": code})
+			return
+		}
+
+		if m := jsonAssignRe.FindStringSubmatch(trimmed); len(m) > 1 {
+			c.jsonVars[m[1]] = true
+			return
 		}
 
 		if m := statusRe.FindStringSubmatch(trimmed); len(m) > 1 {
@@ -279,20 +319,71 @@ func (c *ScriptConverter) Convert() {
 			} else {
 				c.Tests = append(c.Tests, map[string]any{"status": code})
 			}
-			continue
+			return
+		}
+
+		if m := codeBelowRe.FindStringSubmatch(trimmed); len(m) > 1 {
+			code, _ := strconv.Atoi(m[1])
+			matcher := map[string]any{"lt": code}
+			if curTest != nil {
+				(*curTest)["status"] = matcher
+			} else {
+				c.Tests = append(c.Tests, map[string]any{"status": matcher})
+			}
+			return
+		}
+
+		if m := codeEqlRe.FindStringSubmatch(trimmed); len(m) > 1 {
+			code, _ := strconv.Atoi(m[1])
+			if curTest != nil {
+				(*curTest)["status"] = code
+			} else {
+				c.Tests = append(c.Tests, map[string]any{"status": code})
+			}
+			return
+		}
+
+		if m := codeOneOfRe.FindStringSubmatch(trimmed); len(m) > 1 {
+			var codes []int
+			for _, part := range strings.Split(m[1], ",") {
+				if v, err := strconv.Atoi(strings.TrimSpace(part)); err == nil {
+					codes = append(codes, v)
+				}
+			}
+			if len(codes) > 0 {
+				matcher := map[string]any{"in": codes}
+				if curTest != nil {
+					(*curTest)["status"] = matcher
+				} else {
+					c.Tests = append(c.Tests, map[string]any{"status": matcher})
+				}
+				return
+			}
+		}
+
+		if respOkRe.MatchString(trimmed) {
+			matcher := map[string]any{"lt": 400}
+			if curTest != nil {
+				(*curTest)["status"] = matcher
+			} else {
+				c.Tests = append(c.Tests, map[string]any{"status": matcher})
+			}
+			return
 		}
 
 		if jsonTestRe.MatchString(trimmed) {
-			target := curTest
-			if target == nil {
-				t := map[string]any{}
-				target = &t
-				defer flushTest()
+			c.addHeaderMatcher(curTest, "content-type", map[string]any{"contains": "json"})
+			return
+		}
+
+		if m := headerRe.FindStringSubmatch(trimmed); len(m) > 1 {
+			hName := strings.ToLower(strings.TrimSpace(m[1]))
+			if len(m) > 2 && m[2] != "" {
+				c.addHeaderMatcher(curTest, hName, m[2])
+			} else {
+				c.addHeaderMatcher(curTest, hName, map[string]any{"exists": true})
 			}
-			(*target)["headers"] = map[string]any{
-				"content-type": map[string]any{"contains": "json"},
-			}
-			continue
+			return
 		}
 
 		if m := timeBelowRe.FindStringSubmatch(trimmed); len(m) > 1 {
@@ -302,57 +393,195 @@ func (c *ScriptConverter) Convert() {
 			} else {
 				c.Tests = append(c.Tests, map[string]any{"max_ms": ms})
 			}
-			continue
+			return
 		}
 
 		if m := expectTypeRe.FindStringSubmatch(trimmed); len(m) > 2 {
-			path := cleanJSONPath(m[1])
+			path := c.cleanPath(m[1])
 			typeName := m[2]
 			c.addJSONMatcher(curTest, path, map[string]any{"type": typeName})
-			continue
+			return
 		}
 
 		if m := expectAboveRe.FindStringSubmatch(trimmed); len(m) > 2 {
-			path := cleanJSONPath(m[1])
+			path := c.cleanPath(m[1])
 			val, _ := strconv.Atoi(m[2])
 			c.addJSONMatcher(curTest, path, map[string]any{"gt": val})
-			continue
+			return
+		}
+
+		if m := expectAtLeastRe.FindStringSubmatch(trimmed); len(m) > 2 {
+			path := c.cleanPath(m[1])
+			val, _ := strconv.Atoi(m[2])
+			c.addJSONMatcher(curTest, path, map[string]any{"gte": val})
+			return
+		}
+
+		if m := expectBelowRe.FindStringSubmatch(trimmed); len(m) > 2 {
+			path := c.cleanPath(m[1])
+			val, _ := strconv.Atoi(m[2])
+			c.addJSONMatcher(curTest, path, map[string]any{"lt": val})
+			return
+		}
+
+		if m := expectPropRe.FindStringSubmatch(trimmed); len(m) > 2 {
+			base := c.cleanPath(m[1])
+			prop := strings.TrimSpace(m[2])
+			fullPath := prop
+			if base != "json" && base != "" {
+				fullPath = strings.TrimPrefix(base, "json.") + "." + prop
+			}
+			var matcher any = map[string]any{"exists": true}
+			if len(m) > 3 && strings.TrimSpace(m[3]) != "" {
+				matcher = parseJSLiteral(m[3])
+			}
+			c.addJSONMatcher(curTest, "json."+fullPath, matcher)
+			return
 		}
 
 		if m := expectEqlRe.FindStringSubmatch(trimmed); len(m) > 2 {
-			path := cleanJSONPath(m[1])
-			c.addJSONMatcher(curTest, path, m[2])
-			continue
+			path := c.cleanPath(m[1])
+			c.addJSONMatcher(curTest, path, parseJSLiteral(m[2]))
+			return
+		}
+
+		if m := expectIncludeRe.FindStringSubmatch(trimmed); len(m) > 2 {
+			path := c.cleanPath(m[1])
+			c.addJSONMatcher(curTest, path, map[string]any{"contains": m[2]})
+			return
 		}
 
 		if m := expectLenRe.FindStringSubmatch(trimmed); len(m) > 2 {
-			path := cleanJSONPath(m[1])
+			path := c.cleanPath(m[1])
 			l, _ := strconv.Atoi(m[2])
 			c.addJSONMatcher(curTest, path, map[string]any{"length": l})
-			continue
+			return
+		}
+
+		if m := expectBoolRe.FindStringSubmatch(trimmed); len(m) > 2 {
+			path := c.cleanPath(m[1])
+			c.addJSONMatcher(curTest, path, m[2] == "true")
+			return
+		}
+
+		if m := expectExistRe.FindStringSubmatch(trimmed); len(m) > 1 {
+			path := c.cleanPath(m[1])
+			c.addJSONMatcher(curTest, path, map[string]any{"exists": true})
+			return
 		}
 
 		if m := envSetRe.FindStringSubmatch(trimmed); len(m) > 2 {
 			key := m[1]
-			rhs := cleanJSONPath(strings.TrimSuffix(m[2], ";"))
-			c.Captures[key] = rhs
+			rawRHS := strings.TrimSpace(strings.TrimSuffix(m[2], ";"))
+			if rawRHS == "Date.now()" || strings.Contains(rawRHS, "Date(") {
+				c.Vars[key] = "{{$timestamp}}"
+			} else if strings.Contains(strings.ToLower(rawRHS), "uuid") {
+				c.Vars[key] = "{{$uuid}}"
+			} else {
+				c.Captures[key] = c.cleanPath(rawRHS)
+			}
+			return
+		}
+
+		c.Unconverted = append(c.Unconverted, origLine)
+	}
+
+	for _, line := range expandedLines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || trimmed == "});" || trimmed == "}" || trimmed == "{" {
+			if trimmed == "});" || trimmed == "})" {
+				flushTest()
+			}
 			continue
 		}
 
-		c.Unconverted = append(c.Unconverted, line)
+		if m := pmTestHeaderRe.FindStringSubmatch(trimmed); len(m) > 1 {
+			flushTest()
+			t := map[string]any{"name": m[1]}
+			curTest = &t
+			rest := strings.TrimSpace(m[2])
+			rest = strings.TrimSuffix(rest, "});")
+			rest = strings.TrimSuffix(rest, "})")
+			rest = strings.TrimSuffix(rest, "}")
+			rest = strings.TrimSpace(rest)
+			if rest != "" {
+				for _, part := range strings.Split(rest, ";") {
+					if strings.TrimSpace(part) != "" {
+						processStmt(part, line)
+					}
+				}
+				flushTest()
+			}
+			continue
+		}
+
+		processStmt(trimmed, line)
 	}
 
 	flushTest()
 }
 
-func cleanJSONPath(raw string) string {
+func parseJSLiteral(raw string) any {
+	s := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(raw), ";"))
+	if (strings.HasPrefix(s, `"`) && strings.HasSuffix(s, `"`)) || (strings.HasPrefix(s, `'`) && strings.HasSuffix(s, `'`)) {
+		return s[1 : len(s)-1]
+	}
+	if s == "true" {
+		return true
+	}
+	if s == "false" {
+		return false
+	}
+	if i, err := strconv.Atoi(s); err == nil {
+		return i
+	}
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		return f
+	}
+	return s
+}
+
+func (c *ScriptConverter) cleanPath(raw string) string {
 	s := strings.TrimSpace(raw)
-	s = strings.TrimPrefix(s, "jsonData.")
+	if s == "pm.response.json()" {
+		return "json"
+	}
 	s = strings.TrimPrefix(s, "pm.response.json().")
+	for vName := range c.jsonVars {
+		if s == vName {
+			return "json"
+		}
+		if strings.HasPrefix(s, vName+".") {
+			s = strings.TrimPrefix(s, vName+".")
+			break
+		}
+	}
 	if !strings.HasPrefix(s, "json.") {
 		s = "json." + s
 	}
 	return s
+}
+
+func cleanJSONPath(raw string) string {
+	conv := NewScriptConverter(nil)
+	return conv.cleanPath(raw)
+}
+
+func (c *ScriptConverter) addHeaderMatcher(curTest *map[string]any, headerName string, matcher any) {
+	if curTest != nil {
+		hm, ok := (*curTest)["headers"].(map[string]any)
+		if !ok {
+			hm = make(map[string]any)
+			(*curTest)["headers"] = hm
+		}
+		hm[headerName] = matcher
+	} else {
+		c.Tests = append(c.Tests, map[string]any{
+			"headers": map[string]any{
+				headerName: matcher,
+			},
+		})
+	}
 }
 
 func (c *ScriptConverter) addJSONMatcher(curTest *map[string]any, path string, matcher any) {
@@ -379,6 +608,32 @@ func (c *ScriptConverter) addJSONMatcher(curTest *map[string]any, path string, m
 			},
 		})
 	}
+}
+
+func extractEventLines(eventsAny any) []string {
+	events, ok := eventsAny.([]any)
+	if !ok {
+		return nil
+	}
+	var scriptLines []string
+	for _, ev := range events {
+		em, ok := ev.(map[string]any)
+		if !ok {
+			continue
+		}
+		script, ok := em["script"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if execList, ok := script["exec"].([]any); ok {
+			for _, line := range execList {
+				scriptLines = append(scriptLines, fmt.Sprintf("%v", line))
+			}
+		} else if execStr, ok := script["exec"].(string); ok {
+			scriptLines = append(scriptLines, execStr)
+		}
+	}
+	return scriptLines
 }
 
 func ImportCollection(srcPath string, collectionsDir string, nameOverride string) (*ImportReport, error) {
@@ -422,6 +677,14 @@ func ImportCollection(srcPath string, collectionsDir string, nameOverride string
 	if vars := kvList(data["variable"]); len(vars) > 0 {
 		defaults["vars"] = vars
 	}
+	if lines := extractEventLines(data["event"]); len(lines) > 0 {
+		conv := NewScriptConverter(lines)
+		conv.Convert()
+		if len(conv.Tests) > 0 {
+			defaults["tests"] = conv.Tests
+			report.TestsConverted += len(conv.Tests)
+		}
+	}
 	if len(defaults) > 0 {
 		dYAML, _ := zone.DumpYAML(defaults)
 		_ = os.WriteFile(filepath.Join(destDir, zone.DefaultsFile), []byte(dYAML), 0644)
@@ -459,6 +722,14 @@ func importItems(items []any, parentDir string, prefixRef string, report *Import
 			}
 			if vars := kvList(im["variable"]); len(vars) > 0 {
 				folderDefaults["vars"] = vars
+			}
+			if lines := extractEventLines(im["event"]); len(lines) > 0 {
+				conv := NewScriptConverter(lines)
+				conv.Convert()
+				if len(conv.Tests) > 0 {
+					folderDefaults["tests"] = conv.Tests
+					report.TestsConverted += len(conv.Tests)
+				}
 			}
 			if len(folderDefaults) > 0 {
 				fYAML, _ := zone.DumpYAML(folderDefaults)
@@ -582,38 +853,30 @@ func convertRequest(item map[string]any, req map[string]any, report *ImportRepor
 	}
 
 	// Scripts / Events
-	if events, ok := item["event"].([]any); ok {
-		var scriptLines []string
-		for _, ev := range events {
-			em, ok := ev.(map[string]any)
+	if scriptLines := extractEventLines(item["event"]); len(scriptLines) > 0 {
+		conv := NewScriptConverter(scriptLines)
+		conv.Convert()
+		if len(conv.Tests) > 0 {
+			out["tests"] = conv.Tests
+			report.TestsConverted += len(conv.Tests)
+		}
+		if len(conv.Captures) > 0 {
+			out["captures"] = conv.Captures
+			report.CapturesConverted += len(conv.Captures)
+		}
+		if len(conv.Vars) > 0 {
+			varsMap, ok := out["vars"].(map[string]any)
 			if !ok {
-				continue
+				varsMap = make(map[string]any)
+				out["vars"] = varsMap
 			}
-			script, ok := em["script"].(map[string]any)
-			if !ok {
-				continue
-			}
-			if execList, ok := script["exec"].([]any); ok {
-				for _, line := range execList {
-					scriptLines = append(scriptLines, fmt.Sprintf("%v", line))
-				}
+			for k, v := range conv.Vars {
+				varsMap[k] = v
 			}
 		}
-		if len(scriptLines) > 0 {
-			conv := NewScriptConverter(scriptLines)
-			conv.Convert()
-			if len(conv.Tests) > 0 {
-				out["tests"] = conv.Tests
-				report.TestsConverted += len(conv.Tests)
-			}
-			if len(conv.Captures) > 0 {
-				out["captures"] = conv.Captures
-				report.CapturesConverted += len(conv.Captures)
-			}
-			if len(conv.Unconverted) > 0 {
-				out["unconverted"] = map[string]any{"test": conv.Unconverted}
-				report.Unconverted[ref] = conv.Unconverted
-			}
+		if len(conv.Unconverted) > 0 {
+			out["unconverted"] = map[string]any{"test": conv.Unconverted}
+			report.Unconverted[ref] = conv.Unconverted
 		}
 	}
 

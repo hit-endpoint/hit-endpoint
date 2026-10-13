@@ -1,6 +1,7 @@
 package learn
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -60,69 +61,83 @@ func NewVerifier(z *zone.Zone, mockURL string) *Verifier {
 	}
 	mockURL = strings.TrimRight(mockURL, "/")
 
-	isSandboxEntry := func(e *history.Entry, fromZone bool) bool {
-		if e == nil {
+	var startedAt time.Time
+	client := http.Client{Timeout: 500 * time.Millisecond}
+	if resp, err := client.Get(mockURL + "/health"); err == nil {
+		var healthData map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&healthData)
+		_ = resp.Body.Close()
+		if saStr, ok := healthData["started_at"].(string); ok && saStr != "" {
+			if parsed, pErr := time.Parse(time.RFC3339Nano, saStr); pErr == nil {
+				startedAt = parsed
+			} else if parsed, pErr := time.Parse(time.RFC3339, saStr); pErr == nil {
+				startedAt = parsed
+			}
+		}
+	}
+
+	matchesMockURL := func(rawURL string) bool {
+		u := strings.ToLower(strings.TrimSpace(rawURL))
+		m := strings.ToLower(strings.TrimRight(mockURL, "/"))
+		if u == "" || m == "" {
 			return false
 		}
-		if fromZone {
+		if strings.HasPrefix(u, m) {
 			return true
 		}
-		if e.Source == "flow" || e.Source == "chain" || e.Source == "perf" {
-			return true
+		var alt string
+		if strings.Contains(m, "127.0.0.1") {
+			alt = strings.Replace(m, "127.0.0.1", "localhost", 1)
+		} else if strings.Contains(m, "localhost") {
+			alt = strings.Replace(m, "localhost", "127.0.0.1", 1)
 		}
-		u := strings.ToLower(e.Url)
-		m := strings.ToLower(mockURL)
-		if m != "" && strings.HasPrefix(u, m) {
-			return true
-		}
-		if strings.Contains(u, "127.0.0.1:8765") || strings.Contains(u, "localhost:8765") {
+		if alt != "" && strings.HasPrefix(u, alt) {
 			return true
 		}
 		return false
 	}
 
-	var entries []*history.Entry
-	// 1. Check zone history
-	var zoneRoot string
-	if z != nil {
-		zoneRoot = z.Root
+	isSandboxEntry := func(e *history.Entry) bool {
+		if e == nil {
+			return false
+		}
+		if !startedAt.IsZero() && e.Timestamp != "" {
+			if ts, err := time.Parse(time.RFC3339Nano, e.Timestamp); err == nil {
+				if ts.Before(startedAt.Add(-2 * time.Second)) {
+					return false
+				}
+			} else if ts, err := time.Parse(time.RFC3339, e.Timestamp); err == nil {
+				if ts.Before(startedAt.Add(-2 * time.Second)) {
+					return false
+				}
+			}
+		}
+		if matchesMockURL(e.Url) {
+			return true
+		}
+		if (e.Source == "perf" || e.Source == "flow" || e.Source == "chain") && !strings.Contains(e.Url, "://") && z != nil {
+			for _, srvName := range z.ServerNames() {
+				if srv, err := z.LoadServer(srvName); err == nil && srv != nil {
+					if bu, ok := srv.Vars["base_url"].(string); ok && matchesMockURL(bu) {
+						return true
+					}
+				}
+			}
+		}
+		return false
 	}
-	histPath := history.GetHistoryPath(zoneRoot)
+
+	var entries []*history.Entry
+	// Read only from the active zone's history file (or local ./.hit/history.jsonl), never global ~/.hit/history.jsonl
+	histPath := filepath.Join(".", ".hit", "history.jsonl")
+	if z != nil && z.Root != "" {
+		histPath = filepath.Join(z.Root, ".hit", "history.jsonl")
+	}
 	store := history.NewStore(histPath)
 	if e, err := store.List(500, 0, "", ""); err == nil {
 		for _, item := range e {
-			if isSandboxEntry(item, z != nil) {
+			if isSandboxEntry(item) {
 				entries = append(entries, item)
-			}
-		}
-	}
-
-	// 2. If no zone was explicitly provided, also check examples/petstore-zone history when targeting local mock port
-	if z == nil && (strings.Contains(mockURL, "8765")) {
-		for _, candidate := range []string{"examples/petstore-zone", "../../examples/petstore-zone", "../examples/petstore-zone"} {
-			candHist := history.GetHistoryPath(candidate)
-			if candHist != histPath {
-				if ce, err := history.NewStore(candHist).List(500, 0, "", ""); err == nil {
-					for _, item := range ce {
-						if isSandboxEntry(item, true) {
-							entries = append(entries, item)
-						}
-					}
-					break
-				}
-			}
-		}
-	}
-
-	// 3. Also check global ~/.hit/history.jsonl if distinct from zone history
-	globalPath := history.GetHistoryPath("")
-	if globalPath != histPath {
-		globalStore := history.NewStore(globalPath)
-		if ge, err := globalStore.List(500, 0, "", ""); err == nil {
-			for _, item := range ge {
-				if isSandboxEntry(item, false) {
-					entries = append(entries, item)
-				}
 			}
 		}
 	}

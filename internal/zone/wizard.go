@@ -109,6 +109,11 @@ func InitWizard(opts WizardOptions) (*Zone, error) {
 	primarySecContent := fmt.Sprintf("# Secrets template for %s.\n# Copy to %s.secrets.yaml (gitignored) and fill in real credentials:\nvars:\n  auth_token: your-secret-token-here\n", primaryServer, primaryServer)
 	_ = os.WriteFile(primarySecExPath, []byte(primarySecContent), 0644)
 
+	primarySecPath := filepath.Join(serversDir, primaryServer+".secrets.yaml")
+	if _, err := os.Stat(primarySecPath); os.IsNotExist(err) {
+		_ = os.WriteFile(primarySecPath, []byte(primarySecContent), 0600)
+	}
+
 	prodServerPath := filepath.Join(serversDir, "production.yaml")
 	prodYAML, _ := DumpYAML(map[string]any{
 		"base_url": "https://api.example.com",

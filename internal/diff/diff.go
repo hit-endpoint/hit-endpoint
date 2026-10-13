@@ -59,9 +59,47 @@ type ResponseDiff struct {
 }
 
 type Options struct {
-	CompareHeaders bool
-	BodyOnly       bool
-	ContextLines   int
+	CompareHeaders         bool
+	BodyOnly               bool
+	ContextLines           int
+	IgnoreHeaders          []string
+	IncludeVolatileHeaders bool
+}
+
+// DefaultIgnoreHeaders lists standard volatile/ephemeral HTTP response headers ignored by default during diffing.
+var DefaultIgnoreHeaders = []string{
+	"date",
+	"cf-ray",
+	"cf-request-id",
+	"cf-cache-status",
+	"x-request-id",
+	"x-correlation-id",
+	"x-amzn-requestid",
+	"x-amzn-trace-id",
+	"x-cloud-trace-context",
+	"x-runtime",
+	"age",
+	"x-served-by",
+	"x-timer",
+	"x-cache",
+	"x-cache-hits",
+	"report-to",
+	"nel",
+	"server-timing",
+	"x-envoy-upstream-service-time",
+	"fly-request-id",
+	"x-vercel-id",
+	"x-github-request-id",
+	"retry-after",
+	"etag",
+	"last-modified",
+	"expires",
+	"alt-svc",
+	"via",
+	"x-ratelimit-*",
+	"ratelimit-*",
+	"x-rate-limit-*",
+	"rate-limit-*",
 }
 
 // CanonicalizeBody parses JSON and outputs pretty-printed canonical JSON.
@@ -231,32 +269,65 @@ func GroupHunks(diffs []DiffLine, contextLines int) []Hunk {
 	return hunks
 }
 
+func matchesHeaderPattern(headerName, pattern string) bool {
+	lh := strings.ToLower(strings.TrimSpace(headerName))
+	lp := strings.ToLower(strings.TrimSpace(pattern))
+	if lp == "" {
+		return false
+	}
+	if strings.HasSuffix(lp, "*") {
+		return strings.HasPrefix(lh, strings.TrimSuffix(lp, "*"))
+	}
+	return lh == lp
+}
+
 // IsVolatileHeader returns true for ephemeral per-request headers that vary between identical responses.
 func IsVolatileHeader(k string) bool {
 	lk := strings.ToLower(strings.TrimSpace(k))
-	switch lk {
-	case "date", "cf-ray", "x-request-id", "x-correlation-id", "x-amzn-requestid",
-		"x-runtime", "age", "cf-cache-status", "x-served-by", "x-timer", "report-to", "nel":
-		return true
+	for _, pat := range DefaultIgnoreHeaders {
+		if matchesHeaderPattern(lk, pat) {
+			return true
+		}
 	}
-	if strings.HasPrefix(lk, "x-ratelimit-") || strings.HasPrefix(lk, "ratelimit-") {
+	if strings.Contains(lk, "ratelimit") || strings.Contains(lk, "rate-limit") ||
+		strings.Contains(lk, "request-id") || strings.Contains(lk, "requestid") ||
+		strings.Contains(lk, "trace-id") || strings.Contains(lk, "correlation-id") {
 		return true
 	}
 	return false
 }
 
-// CompareHeaders finds additions, deletions, and modifications between headers.
+func isIgnoredHeader(k string, extraIgnore []string, includeVolatile bool) bool {
+	if !includeVolatile && IsVolatileHeader(k) {
+		return true
+	}
+	for _, pat := range extraIgnore {
+		for _, part := range strings.Split(pat, ",") {
+			if matchesHeaderPattern(k, part) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// CompareHeaders finds additions, deletions, and modifications between headers, ignoring volatile headers by default.
 func CompareHeaders(oldH, newH map[string]string) []HeaderDiff {
+	return CompareHeadersWithIgnore(oldH, newH, nil, false)
+}
+
+// CompareHeadersWithIgnore finds header differences while applying the volatile header ignore list and any custom ignored headers.
+func CompareHeadersWithIgnore(oldH, newH map[string]string, ignoreHeaders []string, includeVolatile bool) []HeaderDiff {
 	var diffs []HeaderDiff
 	displayNames := make(map[string]string)
 	for k := range oldH {
-		if IsVolatileHeader(k) {
+		if isIgnoredHeader(k, ignoreHeaders, includeVolatile) {
 			continue
 		}
 		displayNames[strings.ToLower(k)] = k
 	}
 	for k := range newH {
-		if IsVolatileHeader(k) {
+		if isIgnoredHeader(k, ignoreHeaders, includeVolatile) {
 			continue
 		}
 		if _, exists := displayNames[strings.ToLower(k)]; !exists {
@@ -324,7 +395,7 @@ func Compare(
 	}
 
 	// Compare Headers
-	diff.HeaderDiffs = CompareHeaders(oldHeaders, newHeaders)
+	diff.HeaderDiffs = CompareHeadersWithIgnore(oldHeaders, newHeaders, opts.IgnoreHeaders, opts.IncludeVolatileHeaders)
 	if len(diff.HeaderDiffs) > 0 && !opts.BodyOnly {
 		diff.HasDifferences = true
 	}

@@ -551,3 +551,82 @@ func TestOpenAPIChaosIntegration(t *testing.T) {
 		t.Fatalf("bypassed request expected 200, got %d", rec.Code)
 	}
 }
+
+func TestMockServerPetsPagination(t *testing.T) {
+	srv := NewServer()
+
+	authedGet := func(target string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", target, nil)
+		req.Header.Set("Authorization", "Bearer "+Token)
+		srv.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// Default list returns all 2 seeded pets
+	rec := authedGet("/pets")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var allResp struct {
+		Items      []Pet `json:"items"`
+		Total      int   `json:"total"`
+		Page       int   `json:"page"`
+		Limit      int   `json:"limit"`
+		TotalPages int   `json:"total_pages"`
+		HasMore    bool  `json:"has_more"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &allResp); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if len(allResp.Items) != 2 || allResp.Total != 2 {
+		t.Fatalf("expected 2 pets and total=2, got %d and %d", len(allResp.Items), allResp.Total)
+	}
+
+	// Page 1 with limit 1
+	rec = authedGet("/pets?page=1&limit=1")
+	var page1 struct {
+		Items      []Pet `json:"items"`
+		Total      int   `json:"total"`
+		Page       int   `json:"page"`
+		Limit      int   `json:"limit"`
+		TotalPages int   `json:"total_pages"`
+		HasMore    bool  `json:"has_more"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &page1); err != nil {
+		t.Fatalf("unmarshal page1 failed: %v", err)
+	}
+	if len(page1.Items) != 1 || page1.Items[0].ID != 1 || page1.Total != 2 || page1.Page != 1 || page1.Limit != 1 || page1.TotalPages != 2 || !page1.HasMore {
+		t.Fatalf("unexpected page 1 response: %+v", page1)
+	}
+	if rec.Header().Get("X-Total-Count") != "2" || rec.Header().Get("X-Page") != "1" || rec.Header().Get("X-Per-Page") != "1" {
+		t.Fatalf("unexpected pagination headers: %v", rec.Header())
+	}
+
+	// Page 2 with limit 1 -> 2nd pet
+	rec = authedGet("/pets?page=2&limit=1")
+	var page2 struct {
+		Items   []Pet `json:"items"`
+		Page    int   `json:"page"`
+		HasMore bool  `json:"has_more"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &page2); err != nil {
+		t.Fatalf("unmarshal page2 failed: %v", err)
+	}
+	if len(page2.Items) != 1 || page2.Items[0].ID != 2 || page2.Page != 2 || page2.HasMore {
+		t.Fatalf("unexpected page 2 response: %+v", page2)
+	}
+
+	// ?page=2 without explicit limit defaults to 1 per page so pagination works out of the box on the 2 seeded pets
+	rec = authedGet("/pets?page=2")
+	var page2Default struct {
+		Items []Pet `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &page2Default); err != nil {
+		t.Fatalf("unmarshal page2Default failed: %v", err)
+	}
+	if len(page2Default.Items) != 1 || page2Default.Items[0].ID != 2 {
+		t.Fatalf("expected 1 pet (ID 2) on ?page=2 default limit, got %+v", page2Default.Items)
+	}
+}
+

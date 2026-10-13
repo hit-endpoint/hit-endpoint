@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -53,12 +54,12 @@ func GenerateMutations(method, rawURL string, headers map[string]string, query m
 
 	// 1. Boundary Mutations
 	if allCats || catMap["boundaries"] {
-		results = append(results, generateBoundaryMutations(method, rawURL, headers, jsonBody, isJSON)...)
+		results = append(results, generateBoundaryMutations(method, rawURL, headers, body, jsonBody, isJSON)...)
 	}
 
 	// 2. Type Confusion Mutations
 	if allCats || catMap["types"] {
-		results = append(results, generateTypeMutations(method, rawURL, headers, jsonBody, isJSON)...)
+		results = append(results, generateTypeMutations(method, rawURL, headers, body, jsonBody, isJSON)...)
 	}
 
 	// 3. Extreme String & Buffer Overflow Mutations
@@ -68,7 +69,7 @@ func GenerateMutations(method, rawURL string, headers map[string]string, query m
 
 	// 4. Injection Probes (SQLi, XSS, Path Traversal, Command Injection)
 	if allCats || catMap["injection"] {
-		results = append(results, generateInjectionMutations(method, rawURL, headers, query, jsonBody, isJSON)...)
+		results = append(results, generateInjectionMutations(method, rawURL, headers, query, body, jsonBody, isJSON)...)
 	}
 
 	// 5. Null & Structure Mutations
@@ -105,11 +106,86 @@ func deepCopyJSON(val any) any {
 	return res
 }
 
-func generateBoundaryMutations(method, rawURL string, headers map[string]string, jsonBody any, isJSON bool) []Mutation {
-	var mutations []Mutation
-	if !isJSON {
-		return mutations
+func findPathParamSegment(rawURL string) (segIdx int, segVal string, paramLabel string, isNumeric bool, ok bool) {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Path == "" || u.Path == "/" {
+		return 0, "", "", false, false
 	}
+	trimmed := strings.Trim(u.Path, "/")
+	if trimmed == "" {
+		return 0, "", "", false, false
+	}
+	segments := strings.Split(trimmed, "/")
+
+	for i := len(segments) - 1; i >= 0; i-- {
+		seg := segments[i]
+		if seg == "" {
+			continue
+		}
+		lower := strings.ToLower(seg)
+		if lower == "api" || (strings.HasPrefix(lower, "v") && len(lower) <= 3) {
+			continue
+		}
+		if _, err := strconv.Atoi(seg); err == nil {
+			label := "/{id}"
+			if i > 0 {
+				label = fmt.Sprintf("/%s/{id}", segments[i-1])
+			}
+			return i, seg, label, true, true
+		}
+		hasDigit := false
+		for _, r := range seg {
+			if r >= '0' && r <= '9' {
+				hasDigit = true
+				break
+			}
+		}
+		if hasDigit || strings.HasPrefix(seg, "{") || strings.HasPrefix(seg, ":") {
+			label := "/{param}"
+			if i > 0 {
+				label = fmt.Sprintf("/%s/{param}", segments[i-1])
+			}
+			return i, seg, label, false, true
+		}
+	}
+
+	if len(segments) >= 2 {
+		lastIdx := len(segments) - 1
+		last := strings.ToLower(segments[lastIdx])
+		switch last {
+		case "login", "logout", "health", "status", "echo", "slow", "register", "refresh", "token":
+		default:
+			label := fmt.Sprintf("/%s/{param}", segments[lastIdx-1])
+			return lastIdx, segments[lastIdx], label, false, true
+		}
+	}
+
+	return 0, "", "", false, false
+}
+
+func mutateURLPathSegment(rawURL string, segIdx int, replacement string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	trimmed := strings.Trim(u.Path, "/")
+	segments := strings.Split(trimmed, "/")
+	if segIdx < 0 || segIdx >= len(segments) {
+		return rawURL
+	}
+	rawSegments := make([]string, len(segments))
+	for i, s := range segments {
+		rawSegments[i] = url.PathEscape(s)
+	}
+	segments[segIdx] = replacement
+	rawSegments[segIdx] = url.PathEscape(replacement)
+	u.Path = "/" + strings.Join(segments, "/")
+	u.RawPath = "/" + strings.Join(rawSegments, "/")
+	return u.String()
+}
+
+func generateBoundaryMutations(method, rawURL string, headers map[string]string, body []byte, jsonBody any, isJSON bool) []Mutation {
+	var mutations []Mutation
 
 	boundaries := []struct {
 		name string
@@ -123,89 +199,135 @@ func generateBoundaryMutations(method, rawURL string, headers map[string]string,
 		{"Float Overflow (1e308)", 1e308},
 	}
 
-	if obj, ok := jsonBody.(map[string]any); ok {
-		for key, currentVal := range obj {
-			// If key or current value looks numeric
-			isNum := false
-			switch currentVal.(type) {
-			case float64, int, int64:
-				isNum = true
-			}
-			if isNum || strings.Contains(strings.ToLower(key), "id") || strings.Contains(strings.ToLower(key), "age") || strings.Contains(strings.ToLower(key), "count") {
-				for _, b := range boundaries {
-					mutated := deepCopyJSON(obj).(map[string]any)
-					mutated[key] = b.val
-					bBytes, _ := json.Marshal(mutated)
-					mutations = append(mutations, Mutation{
-						Category:    "boundaries",
-						Name:        fmt.Sprintf("Boundary on %q: %s", key, b.name),
-						Description: fmt.Sprintf("Tests server numeric overflow and boundary handling on property %q", key),
-						Method:      method,
-						URL:         rawURL,
-						Headers:     cloneHeaders(headers),
-						Body:        bBytes,
-					})
+	if isJSON {
+		if obj, ok := jsonBody.(map[string]any); ok {
+			for key, currentVal := range obj {
+				// If key or current value looks numeric
+				isNum := false
+				switch currentVal.(type) {
+				case float64, int, int64:
+					isNum = true
 				}
-				break // one numeric field is enough to test
+				if isNum || strings.Contains(strings.ToLower(key), "id") || strings.Contains(strings.ToLower(key), "age") || strings.Contains(strings.ToLower(key), "count") {
+					for _, b := range boundaries {
+						mutated := deepCopyJSON(obj).(map[string]any)
+						mutated[key] = b.val
+						bBytes, _ := json.Marshal(mutated)
+						mutations = append(mutations, Mutation{
+							Category:    "boundaries",
+							Name:        fmt.Sprintf("Boundary on %q: %s", key, b.name),
+							Description: fmt.Sprintf("Tests server numeric overflow and boundary handling on property %q", key),
+							Method:      method,
+							URL:         rawURL,
+							Headers:     cloneHeaders(headers),
+							Body:        bBytes,
+						})
+					}
+					break // one numeric field is enough to test
+				}
 			}
+		}
+	}
+
+	if segIdx, _, paramLabel, _, ok := findPathParamSegment(rawURL); ok {
+		for _, b := range boundaries {
+			valStr := fmt.Sprintf("%v", b.val)
+			mutURL := mutateURLPathSegment(rawURL, segIdx, valStr)
+			mutations = append(mutations, Mutation{
+				Category:    "boundaries",
+				Name:        fmt.Sprintf("Path boundary on %s: %s", paramLabel, b.name),
+				Description: fmt.Sprintf("Tests URL path parameter boundary handling on %s", paramLabel),
+				Method:      method,
+				URL:         mutURL,
+				Headers:     cloneHeaders(headers),
+				Body:        body,
+			})
 		}
 	}
 
 	return mutations
 }
 
-func generateTypeMutations(method, rawURL string, headers map[string]string, jsonBody any, isJSON bool) []Mutation {
+func generateTypeMutations(method, rawURL string, headers map[string]string, body []byte, jsonBody any, isJSON bool) []Mutation {
 	var mutations []Mutation
-	if !isJSON {
-		return mutations
-	}
 
-	if obj, ok := jsonBody.(map[string]any); ok {
-		for key, currentVal := range obj {
-			var replacement any
-			var repName string
+	if isJSON {
+		if obj, ok := jsonBody.(map[string]any); ok {
+			for key, currentVal := range obj {
+				var replacement any
+				var repName string
 
-			switch currentVal.(type) {
-			case string:
-				replacement = 12345
-				repName = "Number where String expected"
-			case float64:
-				replacement = "not-a-number"
-				repName = "String where Number expected"
-			case bool:
-				replacement = "true"
-				repName = "String where Boolean expected"
-			default:
-				replacement = []any{"unexpected", "array"}
-				repName = "Array where Object/Scalar expected"
+				switch currentVal.(type) {
+				case string:
+					replacement = 12345
+					repName = "Number where String expected"
+				case float64:
+					replacement = "not-a-number"
+					repName = "String where Number expected"
+				case bool:
+					replacement = "true"
+					repName = "String where Boolean expected"
+				default:
+					replacement = []any{"unexpected", "array"}
+					repName = "Array where Object/Scalar expected"
+				}
+
+				mutated := deepCopyJSON(obj).(map[string]any)
+				mutated[key] = replacement
+				bBytes, _ := json.Marshal(mutated)
+				mutations = append(mutations, Mutation{
+					Category:    "types",
+					Name:        fmt.Sprintf("Type confusion on %q: %s", key, repName),
+					Description: fmt.Sprintf("Sends unexpected data type on field %q to verify schema enforcement", key),
+					Method:      method,
+					URL:         rawURL,
+					Headers:     cloneHeaders(headers),
+					Body:        bBytes,
+				})
+				break
 			}
 
-			mutated := deepCopyJSON(obj).(map[string]any)
-			mutated[key] = replacement
-			bBytes, _ := json.Marshal(mutated)
+			// Array where Object expected for the root body
+			arrayBody, _ := json.Marshal([]any{obj})
 			mutations = append(mutations, Mutation{
 				Category:    "types",
-				Name:        fmt.Sprintf("Type confusion on %q: %s", key, repName),
-				Description: fmt.Sprintf("Sends unexpected data type on field %q to verify schema enforcement", key),
+				Name:        "Root payload as Array instead of Object",
+				Description: "Sends root JSON array to endpoints expecting a JSON object",
 				Method:      method,
 				URL:         rawURL,
 				Headers:     cloneHeaders(headers),
-				Body:        bBytes,
+				Body:        arrayBody,
 			})
-			break
 		}
+	}
 
-		// Array where Object expected for the root body
-		arrayBody, _ := json.Marshal([]any{obj})
-		mutations = append(mutations, Mutation{
-			Category:    "types",
-			Name:        "Root payload as Array instead of Object",
-			Description: "Sends root JSON array to endpoints expecting a JSON object",
-			Method:      method,
-			URL:         rawURL,
-			Headers:     cloneHeaders(headers),
-			Body:        arrayBody,
-		})
+	if segIdx, _, paramLabel, isNum, ok := findPathParamSegment(rawURL); ok {
+		pathTypeCases := []struct {
+			name string
+			val  string
+		}{
+			{"String where Number expected", "not-a-number"},
+			{"Boolean where ID expected", "true"},
+			{"Object literal in path parameter", "{}"},
+		}
+		if !isNum {
+			pathTypeCases[0] = struct {
+				name string
+				val  string
+			}{"Number where String expected", "12345"}
+		}
+		for _, tc := range pathTypeCases {
+			mutURL := mutateURLPathSegment(rawURL, segIdx, tc.val)
+			mutations = append(mutations, Mutation{
+				Category:    "types",
+				Name:        fmt.Sprintf("Path type confusion on %s: %s", paramLabel, tc.name),
+				Description: fmt.Sprintf("Sends unexpected parameter type in URL path segment %s", paramLabel),
+				Method:      method,
+				URL:         mutURL,
+				Headers:     cloneHeaders(headers),
+				Body:        body,
+			})
+		}
 	}
 
 	return mutations
@@ -257,6 +379,23 @@ func generateStringMutations(method, rawURL string, headers map[string]string, q
 			}
 		}
 	} else if isBodilessMethod(method, body) {
+		if segIdx, _, paramLabel, _, ok := findPathParamSegment(rawURL); ok {
+			for _, sp := range stringPayloads {
+				if sp.val == "" {
+					continue
+				}
+				mutURL := mutateURLPathSegment(rawURL, segIdx, sp.val)
+				mutations = append(mutations, Mutation{
+					Category:    "strings",
+					Name:        fmt.Sprintf("Path string on %s: %s", paramLabel, sp.name),
+					Description: fmt.Sprintf("Tests URL path parameter parser resilience with extreme input on %s", paramLabel),
+					Method:      method,
+					URL:         mutURL,
+					Headers:     cloneHeaders(headers),
+					Body:        nil,
+				})
+			}
+		}
 		targetParam := "q"
 		if len(query) > 0 {
 			var qKeys []string
@@ -299,7 +438,7 @@ func generateStringMutations(method, rawURL string, headers map[string]string, q
 	return mutations
 }
 
-func generateInjectionMutations(method, rawURL string, headers map[string]string, query map[string]string, jsonBody any, isJSON bool) []Mutation {
+func generateInjectionMutations(method, rawURL string, headers map[string]string, query map[string]string, body []byte, jsonBody any, isJSON bool) []Mutation {
 	var mutations []Mutation
 
 	injections := []struct {
@@ -337,7 +476,23 @@ func generateInjectionMutations(method, rawURL string, headers map[string]string
 		}
 	}
 
-	// 2. In Query parameters (or synthesized query/path for bodiless requests)
+	// 2. In URL Path parameters
+	if segIdx, _, paramLabel, _, ok := findPathParamSegment(rawURL); ok {
+		for _, inj := range injections {
+			mutURL := mutateURLPathSegment(rawURL, segIdx, inj.val)
+			mutations = append(mutations, Mutation{
+				Category:    "injection",
+				Name:        fmt.Sprintf("Path injection in %s: %s", paramLabel, inj.name),
+				Description: fmt.Sprintf("Tests URL path parameter sanitization against %s on %s", inj.name, paramLabel),
+				Method:      method,
+				URL:         mutURL,
+				Headers:     cloneHeaders(headers),
+				Body:        body,
+			})
+		}
+	}
+
+	// 3. In Query parameters (or synthesized query for bodiless requests)
 	if len(query) > 0 || !isJSON {
 		targetKey := "id"
 		if len(query) > 0 {
