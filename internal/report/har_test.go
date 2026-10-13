@@ -107,7 +107,7 @@ func TestBuildHARFromHistory(t *testing.T) {
 			Timestamp:       "2026-09-09T20:15:00.000Z",
 			Method:          "GET",
 			Url:             "https://api.example.com/health",
-			Headers:         map[string]string{"User-Agent": "hit/1.1.0"},
+			Headers:         map[string]string{"User-Agent": "hit/1.1.2"},
 			Status:          200,
 			Reason:          "OK",
 			ElapsedMs:       15.2,

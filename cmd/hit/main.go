@@ -58,7 +58,7 @@ import (
 //go:embed reference.md
 var referenceDoc string
 
-var Version = "1.1.0"
+var Version = "1.1.2"
 
 const (
 	ExitOK    = 0

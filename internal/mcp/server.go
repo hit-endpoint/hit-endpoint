@@ -157,7 +157,7 @@ func handleRequest(req *JSONRPCRequest, defaultZone string) *JSONRPCResponse {
 			},
 			"serverInfo": map[string]any{
 				"name":    "hit-api-tester",
-				"version": "1.1.0",
+				"version": "1.1.2",
 			},
 		}
 		return &JSONRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: result}

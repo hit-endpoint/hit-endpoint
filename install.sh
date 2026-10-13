@@ -41,7 +41,7 @@ if [ -z "${VERSION}" ]; then
   fi
   # Fallback if API rate-limited or no releases yet
   if [ -z "${VERSION}" ]; then
-    VERSION="v1.1.0"
+    VERSION="v1.1.2"
   fi
 fi
 

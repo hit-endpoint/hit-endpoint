@@ -131,7 +131,7 @@ func (m *mockWorkerTransport) RoundTrip(req *http.Request) (*http.Response, erro
 			ID:      w.id,
 			Region:  w.region,
 			Status:  w.status,
-			Version: "1.1.0",
+			Version: "1.1.2",
 		}
 		data, _ := json.Marshal(st)
 		return &http.Response{
